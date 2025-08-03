@@ -6,6 +6,20 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'lichtenrader-feuerwerkverkauf.de',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: '**.shopify.com',
+        pathname: '/**',
+      },
+    ],
+  },
 }
 
 module.exports = nextConfig
