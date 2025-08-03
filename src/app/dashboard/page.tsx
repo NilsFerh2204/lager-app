@@ -28,10 +28,12 @@ import {
   MapPin,
   ClipboardList,
   Truck,
-  ScanLine
+  ScanLine,
+  Edit3
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import toast from 'react-hot-toast';
+import Link from 'next/link';
 
 // Widget-Typen
 type WidgetType = 
@@ -75,6 +77,7 @@ export default function DashboardPage() {
     topProducts: []
   });
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [editMode, setEditMode] = useState(false);
   
@@ -107,12 +110,19 @@ export default function DashboardPage() {
 
       if (productsError) throw productsError;
 
-      // Bestellungen abrufen
-      const { data: orders, error: ordersError } = await supabase
-        .from('orders')
-        .select('*, order_items(*)');
-
-      if (ordersError) throw ordersError;
+      // Bestellungen abrufen (falls Tabelle existiert)
+      let orders: any[] = [];
+      try {
+        const { data: ordersData, error: ordersError } = await supabase
+          .from('orders')
+          .select('*, order_items(*)');
+        
+        if (!ordersError) {
+          orders = ordersData || [];
+        }
+      } catch (e) {
+        console.log('Orders table not available');
+      }
 
       // Statistiken berechnen
       const totalProducts = products?.length || 0;
@@ -169,22 +179,32 @@ export default function DashboardPage() {
   };
 
   const syncWithShopify = async () => {
-    toast.loading('Synchronisiere mit Shopify...', { id: 'sync' });
+    setSyncing(true);
+    const loadingToast = toast.loading('Synchronisiere mit Shopify...');
+    
     try {
       const response = await fetch('/api/shopify/sync', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
       
       const data = await response.json();
       
-      if (response.ok) {
-        toast.success(data.message || 'Synchronisation erfolgreich!', { id: 'sync' });
-        fetchDashboardData();
+      if (response.ok && data.success) {
+        toast.success(data.message || 'Synchronisation erfolgreich!', { id: loadingToast });
+        // Dashboard-Daten neu laden
+        await fetchDashboardData();
       } else {
-        toast.error(data.error || 'Synchronisation fehlgeschlagen', { id: 'sync' });
+        toast.error(data.error || 'Synchronisation fehlgeschlagen', { id: loadingToast });
+        console.error('Sync error:', data);
       }
     } catch (error) {
-      toast.error('Fehler bei der Synchronisation', { id: 'sync' });
+      console.error('Sync error:', error);
+      toast.error('Fehler bei der Synchronisation', { id: loadingToast });
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -254,8 +274,15 @@ export default function DashboardPage() {
                 <span className="text-sm font-medium">Produkte</span>
               </button>
               <button
-                onClick={() => router.push('/order-picking')}
+                onClick={() => router.push('/bulk-edit')}
                 className="bg-purple-600 text-white p-4 rounded-lg hover:bg-purple-700 transition-colors flex flex-col items-center gap-2"
+              >
+                <Edit3 size={32} />
+                <span className="text-sm font-medium">Bulk Edit</span>
+              </button>
+              <button
+                onClick={() => router.push('/order-picking')}
+                className="bg-indigo-600 text-white p-4 rounded-lg hover:bg-indigo-700 transition-colors flex flex-col items-center gap-2"
               >
                 <ClipboardList size={32} />
                 <span className="text-sm font-medium">Kommissionierung</span>
@@ -268,25 +295,21 @@ export default function DashboardPage() {
                 <span className="text-sm font-medium">Lagerplätze</span>
               </button>
               <button
-                onClick={() => router.push('/shopify-sync')}
-                className="bg-orange-600 text-white p-4 rounded-lg hover:bg-orange-700 transition-colors flex flex-col items-center gap-2"
+                onClick={syncWithShopify}
+                disabled={syncing}
+                className="bg-orange-600 text-white p-4 rounded-lg hover:bg-orange-700 transition-colors flex flex-col items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <RefreshCw size={32} />
-                <span className="text-sm font-medium">Shopify Sync</span>
+                <RefreshCw size={32} className={syncing ? 'animate-spin' : ''} />
+                <span className="text-sm font-medium">
+                  {syncing ? 'Synchronisiere...' : 'Shopify Sync'}
+                </span>
               </button>
               <button
                 onClick={() => toast.info('Scanner-Funktion kommt bald!')}
-                className="bg-indigo-600 text-white p-4 rounded-lg hover:bg-indigo-700 transition-colors flex flex-col items-center gap-2"
+                className="bg-teal-600 text-white p-4 rounded-lg hover:bg-teal-700 transition-colors flex flex-col items-center gap-2"
               >
                 <ScanLine size={32} />
                 <span className="text-sm font-medium">Barcode Scan</span>
-              </button>
-              <button
-                onClick={() => toast.info('Versand-Funktion kommt bald!')}
-                className="bg-teal-600 text-white p-4 rounded-lg hover:bg-teal-700 transition-colors flex flex-col items-center gap-2"
-              >
-                <Truck size={32} />
-                <span className="text-sm font-medium">Versand</span>
               </button>
             </div>
           );
@@ -464,10 +487,11 @@ export default function DashboardPage() {
               </div>
               <button
                 onClick={syncWithShopify}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
+                disabled={syncing}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <RefreshCw size={20} />
-                Sync
+                <RefreshCw size={20} className={syncing ? 'animate-spin' : ''} />
+                {syncing ? 'Synchronisiere...' : 'Sync'}
               </button>
             </div>
           </div>
