@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 interface Product {
   id: string;
@@ -40,6 +41,7 @@ interface Product {
 }
 
 export default function ProductsPage() {
+  const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -150,9 +152,24 @@ export default function ProductsPage() {
       toast.error('Bitte wählen Sie mindestens ein Produkt aus');
       return;
     }
-    // Navigate to bulk edit page with selected IDs
-    const ids = Array.from(selectedProducts).join(',');
-    window.location.href = `/bulk-edit?ids=${ids}`;
+    
+    // Store selected product IDs in sessionStorage instead of URL
+    const selectedIds = Array.from(selectedProducts);
+    
+    // Store the complete product data for selected items
+    const selectedProductsData = products.filter(p => selectedProducts.has(p.id));
+    
+    // Use sessionStorage to avoid URL length limits
+    try {
+      sessionStorage.setItem('bulkEditProductIds', JSON.stringify(selectedIds));
+      sessionStorage.setItem('bulkEditProducts', JSON.stringify(selectedProductsData));
+      
+      // Navigate to bulk edit page
+      router.push('/bulk-edit');
+    } catch (error) {
+      console.error('Error storing selection:', error);
+      toast.error('Fehler beim Speichern der Auswahl. Bitte wählen Sie weniger Produkte aus.');
+    }
   };
 
   const getStockStatus = (stock: number, minStock: number) => {
@@ -176,6 +193,11 @@ export default function ProductsPage() {
     } catch (error) {
       toast.error('Fehler bei der Synchronisation', { id: loadingToast });
     }
+  };
+
+  const handleDirectBulkEdit = () => {
+    // Navigate directly to bulk edit page without pre-selection
+    router.push('/bulk-edit');
   };
 
   if (loading) {
@@ -226,9 +248,17 @@ export default function ProductsPage() {
               ) : (
                 <>
                   <CheckSquare className="h-5 w-5" />
-                  Bulk Edit
+                  Auswählen
                 </>
               )}
+            </button>
+            <button
+              onClick={handleDirectBulkEdit}
+              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2"
+              title="Direkt zur Bulk Edit Seite"
+            >
+              <Edit3 className="h-5 w-5" />
+              Bulk Edit
             </button>
             <button
               onClick={handleSync}
@@ -308,6 +338,16 @@ export default function ProductsPage() {
             <p className="text-2xl font-bold text-blue-600">€{totalValue.toFixed(2)}</p>
           </div>
         </div>
+
+        {/* Info Message for Bulk Edit */}
+        {bulkEditMode && (
+          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
+            <AlertCircle className="h-5 w-5 text-blue-600" />
+            <span className="text-sm text-blue-800">
+              Wählen Sie Produkte aus und klicken Sie auf "X Produkte bearbeiten" oder nutzen Sie direkt den "Bulk Edit" Button für alle Produkte.
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Products Table */}
