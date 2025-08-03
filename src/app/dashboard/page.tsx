@@ -1,253 +1,381 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { 
-  Package, 
-  TrendingUp, 
-  AlertCircle, 
-  CheckCircle,
-  Clock,
-  ArrowRight,
-  BarChart3,
-  Users,
+import { useRouter } from 'next/navigation';
+import {
+  Package,
   ShoppingCart,
+  TrendingUp,
+  AlertCircle,
+  Users,
   DollarSign,
+  BarChart,
+  Clock,
+  CheckCircle,
+  XCircle,
   Warehouse,
-  AlertTriangle,
-  Euro
+  RefreshCw,
+  ArrowUp,
+  ArrowDown,
+  Box
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { useRouter } from 'next/navigation';
+import toast from 'react-hot-toast';
+import Image from 'next/image';
+
+interface DashboardStats {
+  totalProducts: number;
+  lowStockProducts: number;
+  totalOrders: number;
+  pendingOrders: number;
+  totalValue: number;
+  criticalItems: any[];
+  recentOrders: any[];
+  topProducts: any[];
+}
+
+interface ShopInfo {
+  name: string;
+  email: string;
+  domain: string;
+  currency: string;
+  shop_owner: string;
+  image?: string;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [stats, setStats] = useState({
+  const [stats, setStats] = useState<DashboardStats>({
     totalProducts: 0,
-    lowStock: 0,
-    totalValue: 0,
-    recentMovements: 0,
+    lowStockProducts: 0,
     totalOrders: 0,
-    openOrders: 0,
-    storageLocations: 0
+    pendingOrders: 0,
+    totalValue: 0,
+    criticalItems: [],
+    recentOrders: [],
+    topProducts: []
   });
-  const [recentProducts, setRecentProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [shopInfo, setShopInfo] = useState<ShopInfo | null>(null);
+  const [lastSync, setLastSync] = useState<Date | null>(null);
 
   useEffect(() => {
     fetchDashboardData();
+    fetchShopInfo();
   }, []);
+
+  const fetchShopInfo = async () => {
+    try {
+      const response = await fetch('/api/shopify/shop-info');
+      if (response.ok) {
+        const data = await response.json();
+        setShopInfo(data);
+        
+        // Shop-Info in localStorage speichern für andere Komponenten
+        if (data.image) {
+          localStorage.setItem('shop_logo', data.image);
+        }
+        localStorage.setItem('shop_name', data.name);
+      }
+    } catch (error) {
+      console.error('Error fetching shop info:', error);
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
-      // Fetch products
-      const { data: products } = await supabase
+      // Produkte abrufen
+      const { data: products, error: productsError } = await supabase
         .from('products')
         .select('*');
-      
-      // Fetch orders
-      const { data: orders } = await supabase
+
+      if (productsError) throw productsError;
+
+      // Bestellungen abrufen
+      const { data: orders, error: ordersError } = await supabase
         .from('orders')
-        .select('*');
+        .select('*, order_items(*)');
 
-      // Fetch storage locations
-      const { data: locations } = await supabase
-        .from('storage_locations')
-        .select('*')
-        .eq('is_active', true);
+      if (ordersError) throw ordersError;
 
-      if (products) {
-        const lowStockCount = products.filter(p => p.current_stock <= p.min_stock).length;
-        const totalValue = products.reduce((sum, p) => sum + (p.current_stock * p.price), 0);
-        
-        setStats({
-          totalProducts: products.length,
-          lowStock: lowStockCount,
-          totalValue: totalValue,
-          recentMovements: 0,
-          totalOrders: orders?.length || 0,
-          openOrders: orders?.filter(o => !o.fulfillment_status || o.fulfillment_status === 'unfulfilled').length || 0,
-          storageLocations: locations?.length || 0
-        });
+      // Statistiken berechnen
+      const totalProducts = products?.length || 0;
+      const lowStockProducts = products?.filter(p => p.current_stock <= p.min_stock).length || 0;
+      const criticalItems = products?.filter(p => p.current_stock <= p.min_stock)
+        .sort((a, b) => a.current_stock - b.current_stock)
+        .slice(0, 5) || [];
 
-        setRecentProducts(products.slice(0, 5));
+      const totalOrders = orders?.length || 0;
+      const pendingOrders = orders?.filter(o => o.fulfillment_status === 'unfulfilled').length || 0;
+      
+      const totalValue = products?.reduce((sum, product) => 
+        sum + (product.current_stock * product.price), 0) || 0;
+
+      const recentOrders = orders?.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ).slice(0, 5) || [];
+
+      // Top Produkte nach Wert
+      const topProducts = products?.map(p => ({
+        ...p,
+        totalValue: p.current_stock * p.price
+      }))
+        .sort((a, b) => b.totalValue - a.totalValue)
+        .slice(0, 5) || [];
+
+      setStats({
+        totalProducts,
+        lowStockProducts,
+        totalOrders,
+        pendingOrders,
+        totalValue,
+        criticalItems,
+        recentOrders,
+        topProducts
+      });
+
+      // Last Sync Time
+      const lastUpdate = products?.reduce((latest, product) => {
+        const productDate = new Date(product.updated_at);
+        return productDate > latest ? productDate : latest;
+      }, new Date(0));
+      
+      if (lastUpdate && lastUpdate > new Date(0)) {
+        setLastSync(lastUpdate);
       }
+
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
+      toast.error('Fehler beim Laden der Dashboard-Daten');
     } finally {
       setLoading(false);
     }
   };
 
-  const StatCard = ({ title, value, icon: Icon, color, trend, onClick }) => (
-    <div 
-      className={`bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow ${onClick ? 'cursor-pointer' : ''}`}
-      onClick={onClick}
-    >
-      <div className="flex items-center justify-between mb-4">
-        <div className={`p-3 rounded-lg ${color}`}>
-          <Icon className="text-white" size={24} />
-        </div>
-        {trend && (
-          <span className={`text-sm font-medium ${trend > 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {trend > 0 ? '+' : ''}{trend}%
-          </span>
-        )}
-      </div>
-      <h3 className="text-gray-600 text-sm font-medium">{title}</h3>
-      <p className="text-2xl font-bold text-gray-800 mt-1">{value}</p>
-    </div>
-  );
-
-  const QuickAction = ({ title, description, icon: Icon, href }) => (
-    <button
-      onClick={() => router.push(href)}
-      className="flex items-center p-4 bg-white rounded-lg shadow-md hover:shadow-lg transition-all hover:scale-105 w-full text-left"
-    >
-      <div className="p-3 bg-blue-100 rounded-lg mr-4">
-        <Icon className="text-blue-600" size={20} />
-      </div>
-      <div className="flex-1">
-        <h4 className="font-semibold text-gray-800">{title}</h4>
-        <p className="text-sm text-gray-600">{description}</p>
-      </div>
-      <ArrowRight className="text-gray-400" size={20} />
-    </button>
-  );
+  const syncWithShopify = async () => {
+    toast.loading('Synchronisiere mit Shopify...', { id: 'sync' });
+    try {
+      const response = await fetch('/api/shopify/sync', {
+        method: 'POST',
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        toast.success(data.message || 'Synchronisation erfolgreich!', { id: 'sync' });
+        fetchDashboardData();
+      } else {
+        toast.error(data.error || 'Synchronisation fehlgeschlagen', { id: 'sync' });
+      }
+    } catch (error) {
+      toast.error('Fehler bei der Synchronisation', { id: 'sync' });
+    }
+  };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
         <div className="text-gray-600">Lade Dashboard...</div>
       </div>
     );
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      {/* Welcome Section */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-800 mb-2">
-          Willkommen zurück! 🎆
-        </h1>
-        <p className="text-gray-600">
-          Hier ist deine Lagerübersicht vom {new Date().toLocaleDateString('de-DE', { 
-            weekday: 'long', 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric' 
-          })}
-        </p>
-      </div>
+    <div className="min-h-screen bg-gray-100 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Shop Info Header */}
+        {shopInfo && (
+          <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                {shopInfo.image && (
+                  <img
+                    src={shopInfo.image}
+                    alt={shopInfo.name}
+                    className="h-16 w-auto object-contain"
+                  />
+                )}
+                <div>
+                  <h1 className="text-2xl font-bold text-gray-800">{shopInfo.name}</h1>
+                  <p className="text-sm text-gray-600">{shopInfo.domain}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <p className="text-sm text-gray-600">Letzte Synchronisation</p>
+                  <p className="text-sm font-medium">
+                    {lastSync ? lastSync.toLocaleString('de-DE') : 'Nie'}
+                  </p>
+                </div>
+                <button
+                  onClick={syncWithShopify}
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
+                >
+                  <RefreshCw size={20} />
+                  Sync
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <StatCard
-          title="Produkte Gesamt"
-          value={stats.totalProducts}
-          icon={Package}
-          color="bg-blue-500"
-          onClick={() => router.push('/products')}
-        />
-        <StatCard
-          title="Kritische Bestände"
-          value={stats.lowStock}
-          icon={AlertTriangle}
-          color="bg-red-500"
-          onClick={() => router.push('/products')}
-        />
-        <StatCard
-          title="Offene Bestellungen"
-          value={stats.openOrders}
-          icon={ShoppingCart}
-          color="bg-orange-500"
-          onClick={() => router.push('/order-picking')}
-        />
-        <StatCard
-          title="Lagerwert"
-          value={`€${stats.totalValue.toFixed(0)}`}
-          icon={Euro}
-          color="bg-green-500"
-        />
-      </div>
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {/* Total Products */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Produkte Gesamt</p>
+                <p className="text-3xl font-bold text-gray-900">{stats.totalProducts}</p>
+              </div>
+              <Package className="h-12 w-12 text-blue-600" />
+            </div>
+          </div>
 
-      {/* Quick Actions */}
-      <div className="mb-8">
-        <h2 className="text-xl font-bold text-gray-800 mb-4">Schnellzugriff</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <QuickAction
-            title="Produkt hinzufügen"
-            description="Neues Produkt anlegen"
-            icon={Package}
-            href="/products"
-          />
-          <QuickAction
-            title="Kommissionierung"
-            description="Bestellungen bearbeiten"
-            icon={ShoppingCart}
-            href="/order-picking"
-          />
-          <QuickAction
-            title="Shopify Sync"
-            description="Daten synchronisieren"
-            icon={TrendingUp}
-            href="/shopify-sync"
-          />
-          <QuickAction
-            title="Lagerplätze"
-            description="Plätze verwalten"
-            icon={Warehouse}
-            href="/storage-locations"
-          />
+          {/* Low Stock */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Niedriger Bestand</p>
+                <p className="text-3xl font-bold text-orange-600">{stats.lowStockProducts}</p>
+              </div>
+              <AlertCircle className="h-12 w-12 text-orange-600" />
+            </div>
+          </div>
+
+          {/* Pending Orders */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Offene Bestellungen</p>
+                <p className="text-3xl font-bold text-purple-600">{stats.pendingOrders}</p>
+              </div>
+              <ShoppingCart className="h-12 w-12 text-purple-600" />
+            </div>
+          </div>
+
+          {/* Total Value */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Lagerwert</p>
+                <p className="text-3xl font-bold text-green-600">
+                  €{stats.totalValue.toFixed(2)}
+                </p>
+              </div>
+              <DollarSign className="h-12 w-12 text-green-600" />
+            </div>
+          </div>
         </div>
-      </div>
 
-      {/* Recent Products */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-gray-800">Aktuelle Produkte</h2>
-          <button
-            onClick={() => router.push('/products')}
-            className="text-blue-600 hover:text-blue-800 text-sm font-medium flex items-center gap-1"
-          >
-            Alle anzeigen
-            <ArrowRight size={16} />
-          </button>
+        {/* Critical Items & Recent Orders */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          {/* Critical Stock Items */}
+          <div className="bg-white rounded-lg shadow">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                <AlertCircle className="text-red-600" size={20} />
+                Kritischer Lagerbestand
+              </h2>
+            </div>
+            <div className="p-6">
+              {stats.criticalItems.length === 0 ? (
+                <p className="text-gray-500">Alle Produkte haben ausreichend Bestand</p>
+              ) : (
+                <div className="space-y-3">
+                  {stats.criticalItems.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
+                      <div className="flex-1">
+                        <p className="font-medium text-gray-800">{item.name}</p>
+                        <p className="text-sm text-gray-600">SKU: {item.sku}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-red-600">{item.current_stock} Stk</p>
+                        <p className="text-xs text-gray-500">Min: {item.min_stock}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Recent Orders */}
+          <div className="bg-white rounded-lg shadow">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                <Clock className="text-blue-600" size={20} />
+                Letzte Bestellungen
+              </h2>
+            </div>
+            <div className="p-6">
+              {stats.recentOrders.length === 0 ? (
+                <p className="text-gray-500">Keine Bestellungen vorhanden</p>
+              ) : (
+                <div className="space-y-3">
+                  {stats.recentOrders.map((order) => (
+                    <div key={order.id} className="flex items-center justify-between p-3 border rounded-lg">
+                      <div className="flex-1">
+                        <p className="font-medium text-gray-800">#{order.order_number}</p>
+                        <p className="text-sm text-gray-600">{order.customer_name}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold">€{order.total_price}</p>
+                        <span className={`text-xs px-2 py-1 rounded-full ${
+                          order.fulfillment_status === 'fulfilled' 
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-yellow-100 text-yellow-800'
+                        }`}>
+                          {order.fulfillment_status === 'fulfilled' ? 'Erfüllt' : 'Offen'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Produkt</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bestand</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {recentProducts.map((product) => (
-                <tr key={product.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm">{product.name}</td>
-                  <td className="px-4 py-3 text-sm font-mono">{product.sku}</td>
-                  <td className="px-4 py-3 text-sm">{product.current_stock}</td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                      product.current_stock === 0
-                        ? 'bg-red-100 text-red-800'
-                        : product.current_stock <= product.min_stock
-                        ? 'bg-yellow-100 text-yellow-800'
-                        : 'bg-green-100 text-green-800'
-                    }`}>
-                      {product.current_stock === 0
-                        ? 'Ausverkauft'
-                        : product.current_stock <= product.min_stock
-                        ? 'Niedrig'
-                        : 'Verfügbar'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+
+        {/* Top Products by Value */}
+        <div className="bg-white rounded-lg shadow">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+              <TrendingUp className="text-green-600" size={20} />
+              Top Produkte nach Lagerwert
+            </h2>
+          </div>
+          <div className="p-6">
+            <div className="overflow-x-auto">
+              <table className="min-w-full">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-2 text-sm font-medium text-gray-600">Produkt</th>
+                    <th className="text-right py-2 text-sm font-medium text-gray-600">Bestand</th>
+                    <th className="text-right py-2 text-sm font-medium text-gray-600">Preis</th>
+                    <th className="text-right py-2 text-sm font-medium text-gray-600">Gesamtwert</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.topProducts.map((product) => (
+                    <tr key={product.id} className="border-b hover:bg-gray-50">
+                      <td className="py-3">
+                        <div>
+                          <p className="font-medium text-gray-800">{product.name}</p>
+                          <p className="text-sm text-gray-500">SKU: {product.sku}</p>
+                        </div>
+                      </td>
+                      <td className="text-right py-3">{product.current_stock}</td>
+                      <td className="text-right py-3">€{product.price.toFixed(2)}</td>
+                      <td className="text-right py-3 font-bold text-green-600">
+                        €{product.totalValue.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
     </div>
