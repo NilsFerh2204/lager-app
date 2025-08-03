@@ -60,9 +60,13 @@ export default function Navigation() {
             {/* Logo */}
             <div className="flex-shrink-0 flex items-center">
               <Link href="/dashboard" className="flex items-center gap-2">
-                <Flame className="h-8 w-8 text-orange-600" />
-                <span className="font-bold text-xl text-gray-800 hidden sm:block">
-                  Feuerwerk Lager
+                <img
+                  src="https://cdn.shopify.com/s/files/1/0058/4486/1018/files/Lichtenrader_Feuerwerkverkauf_11.png?v=1747664634"
+                  alt="Lichtenrader Feuerwerk"
+                  className="h-10 w-auto object-contain"
+                />
+                <span className="font-bold text-xl text-gray-800 hidden lg:block">
+                  Lagerverwaltung
                 </span>
               </Link>
             </div>

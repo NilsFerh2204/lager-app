@@ -437,7 +437,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <img
-                src="https://lichtenrader-feuerwerkverkauf.de/wp-content/uploads/2023/12/Logo.png"
+                src="https://cdn.shopify.com/s/files/1/0058/4486/1018/files/Lichtenrader_Feuerwerkverkauf_11.png?v=1747664634"
                 alt="Lichtenrader Feuerwerk"
                 className="h-16 w-auto object-contain"
               />

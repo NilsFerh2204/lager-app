@@ -128,14 +128,14 @@ export default function LoginPage() {
         {/* Logo/Header */}
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
-            <div className="relative">
-              <Sparkles className="text-yellow-500 absolute -top-2 -left-2 animate-pulse" size={24} />
-              <Flame className="text-orange-600" size={48} />
-              <Sparkles className="text-yellow-500 absolute -bottom-2 -right-2 animate-pulse animation-delay-2000" size={24} />
-            </div>
+            <img
+              src="https://cdn.shopify.com/s/files/1/0058/4486/1018/files/Lichtenrader_Feuerwerkverkauf_11.png?v=1747664634"
+              alt="Lichtenrader Feuerwerk"
+              className="h-20 w-auto object-contain"
+            />
           </div>
           <h1 className="text-2xl font-bold text-gray-800 mb-2">
-            Feuerwerk Lagerverwaltung
+            Lagerverwaltung
           </h1>
           <p className="text-gray-600">
             Bitte Passwort eingeben
