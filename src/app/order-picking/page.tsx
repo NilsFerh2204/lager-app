@@ -84,74 +84,90 @@ export default function OrderPickingPage() {
   const [picklist, setPicklist] = useState<PicklistItem[]>([]);
   const [pickingInProgress, setPickingInProgress] = useState(false);
 
-  useEffect(() => {
-    fetchOrders();
-  }, [filterStatus]);
-
-  const fetchOrders = async () => {
+ const fetchOrders = async () => {
     try {
-      let query = supabase
+      // Schritt 1: Orders laden (ohne Joins)
+      let ordersQuery = supabase
         .from('orders')
-        .select(`
-          *,
-          order_items (
-            *,
-            product:product_id (
-              id,
-              name,
-              storage_location,
-              current_stock
-            )
-          )
-        `)
+        .select('*')
         .order('shopify_created_at', { ascending: false });
 
       if (filterStatus !== 'all') {
-        query = query.eq('fulfillment_status', filterStatus);
+        ordersQuery = ordersQuery.eq('fulfillment_status', filterStatus);
       }
 
-      const { data, error } = await query;
+      const { data: ordersData, error: ordersError } = await ordersQuery;
 
-      if (error) throw error;
-      setOrders(data || []);
+      if (ordersError) {
+        console.error('Orders fetch error:', ordersError);
+        throw ordersError;
+      }
+
+      if (!ordersData || ordersData.length === 0) {
+        setOrders([]);
+        setLoading(false);
+        return;
+      }
+
+      // Schritt 2: Order Items separat laden
+      const orderIds = ordersData.map(o => o.id);
+      const { data: itemsData, error: itemsError } = await supabase
+        .from('order_items')
+        .select('*')
+        .in('order_id', orderIds);
+
+      if (itemsError) {
+        console.error('Items fetch error:', itemsError);
+        // Trotzdem weitermachen, nur ohne Items
+      }
+
+      // Schritt 3: Produkte laden (optional, für Lagerplätze)
+      let productsMap = new Map();
+      if (itemsData && itemsData.length > 0) {
+        const productIds = itemsData
+          .map(item => item.product_id)
+          .filter(id => id !== null);
+        
+        if (productIds.length > 0) {
+          const { data: productsData } = await supabase
+            .from('products')
+            .select('id, name, storage_location, current_stock')
+            .in('id', productIds);
+          
+          if (productsData) {
+            productsData.forEach(product => {
+              productsMap.set(product.id, product);
+            });
+          }
+        }
+      }
+
+      // Schritt 4: Alles zusammenführen
+      const ordersWithItems = ordersData.map(order => {
+        const orderItems = (itemsData || [])
+          .filter(item => item.order_id === order.id)
+          .map(item => ({
+            ...item,
+            product: item.product_id ? productsMap.get(item.product_id) : null
+          }));
+
+        return {
+          ...order,
+          order_items: orderItems
+        };
+      });
+
+      setOrders(ordersWithItems);
+      console.log(`Loaded ${ordersWithItems.length} orders with items`);
+      
     } catch (error: any) {
       console.error('Error fetching orders:', error);
       toast.error('Fehler beim Laden der Bestellungen');
+      setOrders([]);
     } finally {
       setLoading(false);
     }
   };
-
-  const syncOrders = async () => {
-    setSyncing(true);
-    const loadingToast = toast.loading('Synchronisiere Bestellungen...');
-    
-    try {
-      const response = await fetch('/api/shopify/sync-orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      
-      const data = await response.json();
-      
-      if (response.ok && data.success) {
-        toast.success(data.message || 'Bestellungen synchronisiert!', { id: loadingToast });
-        await fetchOrders();
-      } else {
-        toast.error(data.error || 'Synchronisation fehlgeschlagen', { id: loadingToast });
-      }
-    } catch (error) {
-      toast.error('Fehler bei der Synchronisation', { id: loadingToast });
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const generatePicklist = () => {
-    if (selectedOrders.size === 0) {
-      toast.error('Bitte wählen Sie mindestens eine Bestellung aus');
-      return;
-    }
 
     // Sammle alle Items aus ausgewählten Bestellungen
     const itemsMap = new Map<string, PicklistItem>();
