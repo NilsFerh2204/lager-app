@@ -67,7 +67,7 @@ const filteredOrders = data.orders.filter((order: any) => {
       
       // Check for next page
       const linkHeader = response.headers.get('Link')
-      nextPageUrl = null
+nextPageUrl = ''
       
       if (linkHeader) {
         const matches = linkHeader.match(/<([^>]+)>; rel="next"/)
