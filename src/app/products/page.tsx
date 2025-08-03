@@ -1,284 +1,359 @@
 'use client';
+
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { 
-  Package, 
-  Search, 
-  AlertCircle, 
-  Edit, 
-  Save, 
-  X, 
-  Plus, 
-  Minus,
-  Loader2,
-  Check,
+import {
+  Package,
+  Edit,
+  Trash2,
+  Save,
+  X,
+  AlertTriangle,
   RefreshCw,
+  TrendingUp,
+  TrendingDown,
+  Search,
   Filter,
-  DollarSign,
-  Box,
-  Tag,
-  Edit3,
-  CheckSquare,
-  Square,
-  Trash2
+  Download,
+  Upload,
+  MapPin,
+  Plus,
+  Move,
+  QrCode,
+  Eye,
+  Copy
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 
 interface Product {
   id: string;
-  sku: string;
+  shopify_id: string | null;
   name: string;
-  price: number;
+  sku: string;
   current_stock: number;
-  min_stock: number;
-  category: string;
-  storage_location?: string;
-  shopify_id?: string;
-  description?: string;
-  image_url?: string;
+  minimum_stock: number;
+  storage_location: string | null;
+  last_sync: string | null;
+  last_inventory_update: string | null;
+  created_at: string;
+  updated_at: string;
+  locations?: ProductLocation[];
+}
+
+interface ProductLocation {
+  id: string;
+  product_id: string;
+  location_id: string;
+  quantity: number;
+  is_primary: boolean;
+  location?: StorageLocation;
+}
+
+interface StorageLocation {
+  id: string;
+  code: string;
+  name: string;
+  zone: string;
+  row: string;
+  shelf: string;
+  level: string;
 }
 
 export default function ProductsPage() {
-  const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
+  const [locations, setLocations] = useState<StorageLocation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [syncing, setSyncing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<Product | null>(null);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
-  
-  // Bulk Edit States
-  const [bulkEditMode, setBulkEditMode] = useState(false);
-  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [editValues, setEditValues] = useState<Partial<Product>>({});
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterLowStock, setFilterLowStock] = useState(false);
+  const [showLocationModal, setShowLocationModal] = useState<Product | null>(null);
+  const [locationFormData, setLocationFormData] = useState({
+    locationId: '',
+    quantity: 0,
+    isPrimary: false
+  });
 
   useEffect(() => {
     fetchProducts();
+    fetchLocations();
   }, []);
 
   const fetchProducts = async () => {
     try {
-      const { data, error } = await supabase
+      const { data: productsData, error: productsError } = await supabase
         .from('products')
         .select('*')
         .order('name');
 
-      if (error) throw error;
-      
-      setProducts(data || []);
-      
-      // Extract unique categories
-      const uniqueCategories = [...new Set((data || []).map(p => p.category))].filter(Boolean);
-      setCategories(uniqueCategories);
+      if (productsError) throw productsError;
+
+      // Fetch product locations
+      const { data: locationsData, error: locationsError } = await supabase
+        .from('product_locations')
+        .select(`
+          *,
+          location:location_id (*)
+        `);
+
+      if (locationsError) throw locationsError;
+
+      // Combine data
+      const productsWithLocations = productsData?.map(product => ({
+        ...product,
+        locations: locationsData?.filter(loc => loc.product_id === product.id) || []
+      })) || [];
+
+      setProducts(productsWithLocations);
     } catch (error: any) {
+      console.error('Error fetching products:', error);
       toast.error('Fehler beim Laden der Produkte');
-      console.error(error);
     } finally {
       setLoading(false);
     }
   };
 
-  const filteredProducts = products.filter(product => {
-    const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          product.sku.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = selectedCategory === 'all' || product.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
-
-  const handleEdit = (product: Product) => {
-    setEditingId(product.id);
-    setEditForm({ ...product });
-  };
-
-  const handleSave = async () => {
-    if (!editForm) return;
-
+  const fetchLocations = async () => {
     try {
-      const { error } = await supabase
-        .from('products')
-        .update({
-          name: editForm.name,
-          price: editForm.price,
-          current_stock: editForm.current_stock,
-          min_stock: editForm.min_stock,
-          category: editForm.category,
-          storage_location: editForm.storage_location
-        })
-        .eq('id', editForm.id);
+      const { data, error } = await supabase
+        .from('storage_locations')
+        .select('*')
+        .order('code');
 
       if (error) throw error;
-
-      setProducts(products.map(p => 
-        p.id === editForm.id ? editForm : p
-      ));
-      
-      setEditingId(null);
-      setEditForm(null);
-      toast.success('Produkt aktualisiert');
+      setLocations(data || []);
     } catch (error: any) {
-      toast.error('Fehler beim Speichern');
-      console.error(error);
+      console.error('Error fetching locations:', error);
     }
   };
 
-  const toggleBulkEditMode = () => {
-    setBulkEditMode(!bulkEditMode);
-    setSelectedProducts(new Set());
-  };
-
-  const toggleProductSelection = (productId: string) => {
-    const newSelection = new Set(selectedProducts);
-    if (newSelection.has(productId)) {
-      newSelection.delete(productId);
-    } else {
-      newSelection.add(productId);
-    }
-    setSelectedProducts(newSelection);
-  };
-
-  const toggleAllSelection = () => {
-    if (selectedProducts.size === filteredProducts.length) {
-      setSelectedProducts(new Set());
-    } else {
-      setSelectedProducts(new Set(filteredProducts.map(p => p.id)));
-    }
-  };
-
-  const handleBulkEditClick = () => {
-    if (selectedProducts.size === 0) {
-      toast.error('Bitte wählen Sie mindestens ein Produkt aus');
-      return;
-    }
-    
-    // Store selected product IDs in sessionStorage instead of URL
-    const selectedIds = Array.from(selectedProducts);
-    
-    // Store the complete product data for selected items
-    const selectedProductsData = products.filter(p => selectedProducts.has(p.id));
-    
-    // Use sessionStorage to avoid URL length limits
-    try {
-      sessionStorage.setItem('bulkEditProductIds', JSON.stringify(selectedIds));
-      sessionStorage.setItem('bulkEditProducts', JSON.stringify(selectedProductsData));
-      
-      // Navigate to bulk edit page
-      router.push('/bulk-edit');
-    } catch (error) {
-      console.error('Error storing selection:', error);
-      toast.error('Fehler beim Speichern der Auswahl. Bitte wählen Sie weniger Produkte aus.');
-    }
-  };
-
-  const getStockStatus = (stock: number, minStock: number) => {
-    if (stock === 0) return { text: 'Ausverkauft', color: 'bg-red-100 text-red-800' };
-    if (stock <= minStock) return { text: 'Niedrig', color: 'bg-yellow-100 text-yellow-800' };
-    return { text: 'Verfügbar', color: 'bg-green-100 text-green-800' };
-  };
-
-  const handleSync = async () => {
+  const syncWithShopify = async () => {
+    setSyncing(true);
     const loadingToast = toast.loading('Synchronisiere mit Shopify...');
+    
     try {
-      const response = await fetch('/api/shopify/sync', { method: 'POST' });
+      const response = await fetch('/api/shopify/sync-inventory', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
       const data = await response.json();
       
-      if (data.success) {
-        toast.success(data.message || 'Synchronisation erfolgreich!', { id: loadingToast });
-        await fetchProducts();
+      if (response.ok && data.success) {
+        toast.success(`${data.synced} Produkte synchronisiert`, { id: loadingToast });
+        fetchProducts();
       } else {
         toast.error(data.error || 'Synchronisation fehlgeschlagen', { id: loadingToast });
       }
     } catch (error) {
       toast.error('Fehler bei der Synchronisation', { id: loadingToast });
+    } finally {
+      setSyncing(false);
     }
   };
 
-  const handleDirectBulkEdit = () => {
-    // Navigate directly to bulk edit page without pre-selection
-    router.push('/bulk-edit');
+  const handleEdit = (product: Product) => {
+    setEditingId(product.id);
+    setEditValues({
+      name: product.name,
+      sku: product.sku,
+      current_stock: product.current_stock,
+      minimum_stock: product.minimum_stock,
+      storage_location: product.storage_location
+    });
   };
+
+  const handleSave = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('products')
+        .update({
+          ...editValues,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setProducts(products.map(p => 
+        p.id === id ? { ...p, ...editValues } : p
+      ));
+      
+      toast.success('Produkt aktualisiert');
+      setEditingId(null);
+      setEditValues({});
+    } catch (error: any) {
+      console.error('Error updating product:', error);
+      toast.error('Fehler beim Aktualisieren');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Möchten Sie dieses Produkt wirklich löschen?')) return;
+
+    try {
+      const { error } = await supabase
+        .from('products')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setProducts(products.filter(p => p.id !== id));
+      toast.success('Produkt gelöscht');
+    } catch (error: any) {
+      console.error('Error deleting product:', error);
+      toast.error('Fehler beim Löschen');
+    }
+  };
+
+  const addProductLocation = async () => {
+    if (!showLocationModal || !locationFormData.locationId) return;
+
+    try {
+      // Add to product_locations table
+      const { data, error } = await supabase
+        .from('product_locations')
+        .insert({
+          product_id: showLocationModal.id,
+          location_id: locationFormData.locationId,
+          quantity: locationFormData.quantity,
+          is_primary: locationFormData.isPrimary
+        })
+        .select(`
+          *,
+          location:location_id (*)
+        `)
+        .single();
+
+      if (error) throw error;
+
+      // If primary, update product's main storage_location
+      if (locationFormData.isPrimary) {
+        await supabase
+          .from('products')
+          .update({ 
+            storage_location: locations.find(l => l.id === locationFormData.locationId)?.code 
+          })
+          .eq('id', showLocationModal.id);
+      }
+
+      // Update local state
+      setProducts(products.map(p => {
+        if (p.id === showLocationModal.id) {
+          return {
+            ...p,
+            locations: [...(p.locations || []), data],
+            storage_location: locationFormData.isPrimary 
+              ? locations.find(l => l.id === locationFormData.locationId)?.code || p.storage_location
+              : p.storage_location
+          };
+        }
+        return p;
+      }));
+
+      toast.success('Lagerplatz hinzugefügt');
+      setLocationFormData({ locationId: '', quantity: 0, isPrimary: false });
+    } catch (error: any) {
+      console.error('Error adding location:', error);
+      toast.error('Fehler beim Hinzufügen des Lagerplatzes');
+    }
+  };
+
+  const removeProductLocation = async (productId: string, locationId: string) => {
+    try {
+      const { error } = await supabase
+        .from('product_locations')
+        .delete()
+        .eq('product_id', productId)
+        .eq('location_id', locationId);
+
+      if (error) throw error;
+
+      setProducts(products.map(p => {
+        if (p.id === productId) {
+          return {
+            ...p,
+            locations: p.locations?.filter(l => l.location_id !== locationId) || []
+          };
+        }
+        return p;
+      }));
+
+      toast.success('Lagerplatz entfernt');
+    } catch (error: any) {
+      console.error('Error removing location:', error);
+      toast.error('Fehler beim Entfernen');
+    }
+  };
+
+  const filteredProducts = products.filter(product => {
+    const matchesSearch = 
+      product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      product.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      product.storage_location?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesLowStock = !filterLowStock || product.current_stock <= product.minimum_stock;
+    return matchesSearch && matchesLowStock;
+  });
+
+  const totalValue = products.reduce((sum, p) => sum + p.current_stock, 0);
+  const lowStockCount = products.filter(p => p.current_stock <= p.minimum_stock).length;
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
     );
   }
 
-  // Statistics
-  const totalProducts = products.length;
-  const inStockProducts = products.filter(p => p.current_stock > 0).length;
-  const criticalStock = products.filter(p => p.current_stock <= p.min_stock && p.current_stock > 0).length;
-  const outOfStock = products.filter(p => p.current_stock === 0).length;
-  const totalValue = products.reduce((sum, p) => sum + (p.price * p.current_stock), 0);
-
   return (
-    <div className="container mx-auto p-6">
+    <div className="container mx-auto p-4 md:p-6">
       {/* Header */}
-      <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-        <div className="flex justify-between items-center mb-6">
+      <div className="bg-white rounded-lg shadow-md p-4 md:p-6 mb-6">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
           <div className="flex items-center gap-3">
             <Package className="h-8 w-8 text-blue-600" />
-            <h1 className="text-3xl font-bold">Produktverwaltung</h1>
+            <div>
+              <h1 className="text-2xl md:text-3xl font-bold">Produkte</h1>
+              <p className="text-gray-600">Verwaltung und Multi-Location</p>
+            </div>
           </div>
-          <div className="flex gap-3">
-            {bulkEditMode && selectedProducts.size > 0 && (
-              <button
-                onClick={handleBulkEditClick}
-                className="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors flex items-center gap-2"
-              >
-                <Edit3 className="h-5 w-5" />
-                {selectedProducts.size} Produkte bearbeiten
-              </button>
-            )}
-            <button
-              onClick={toggleBulkEditMode}
-              className={`${
-                bulkEditMode ? 'bg-gray-600' : 'bg-purple-600'
-              } text-white px-4 py-2 rounded-lg hover:opacity-90 transition-colors flex items-center gap-2`}
-            >
-              {bulkEditMode ? (
-                <>
-                  <X className="h-5 w-5" />
-                  Abbrechen
-                </>
-              ) : (
-                <>
-                  <CheckSquare className="h-5 w-5" />
-                  Auswählen
-                </>
-              )}
-            </button>
-            <button
-              onClick={handleDirectBulkEdit}
-              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2"
-              title="Direkt zur Bulk Edit Seite"
-            >
-              <Edit3 className="h-5 w-5" />
-              Bulk Edit
-            </button>
-            <button
-              onClick={handleSync}
-              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
-            >
-              <RefreshCw className="h-5 w-5" />
-              Shopify Sync
-            </button>
-            <Link
-              href="/products/new"
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-            >
-              <Plus className="h-5 w-5" />
-              Neues Produkt
-            </Link>
-          </div>
+          <button
+            onClick={syncWithShopify}
+            disabled={syncing}
+            className="w-full md:w-auto bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-5 w-5 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Synchronisiere...' : 'Mit Shopify Sync'}
+          </button>
         </div>
 
-        {/* Search and Filters */}
-        <div className="flex gap-4 mb-6">
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-gray-50 p-4 rounded-lg">
+            <p className="text-sm text-gray-600">Gesamt</p>
+            <p className="text-xl md:text-2xl font-bold">{products.length}</p>
+          </div>
+          <div className="bg-blue-50 p-4 rounded-lg">
+            <p className="text-sm text-gray-600">Lagerbestand</p>
+            <p className="text-xl md:text-2xl font-bold text-blue-600">{totalValue}</p>
+          </div>
+          <div className="bg-orange-50 p-4 rounded-lg">
+            <p className="text-sm text-gray-600">Niedriger Bestand</p>
+            <p className="text-xl md:text-2xl font-bold text-orange-600">{lowStockCount}</p>
+          </div>
+          <div className="bg-green-50 p-4 rounded-lg">
+            <p className="text-sm text-gray-600">Lagerplätze</p>
+            <p className="text-xl md:text-2xl font-bold text-green-600">{locations.length}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+        <div className="flex flex-col md:flex-row gap-4">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
             <input
@@ -286,235 +361,331 @@ export default function ProductsPage() {
               placeholder="Suche nach Name, SKU oder Lagerplatz..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full pl-10 pr-4 py-2 border rounded-lg"
             />
           </div>
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          <button
+            onClick={() => setFilterLowStock(!filterLowStock)}
+            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+              filterLowStock
+                ? 'bg-orange-100 text-orange-700 border-orange-300'
+                : 'bg-white border text-gray-700'
+            }`}
           >
-            <option value="all">Alle Kategorien</option>
-            {categories.map(cat => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setViewMode('list')}
-              className={`px-3 py-2 rounded-lg ${viewMode === 'list' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-            >
-              Liste
-            </button>
-            <button
-              onClick={() => setViewMode('grid')}
-              className={`px-3 py-2 rounded-lg ${viewMode === 'grid' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
-            >
-              Grid
-            </button>
-          </div>
+            <AlertTriangle className="h-5 w-5" />
+            Nur niedriger Bestand
+          </button>
+        </div>
+      </div>
+
+      {/* Products Table - Mobile Optimized */}
+      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+        {/* Desktop Table */}
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Produkt
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  SKU
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Bestand
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Lagerplätze
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Aktionen
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {filteredProducts.map((product) => (
+                <tr key={product.id}>
+                  <td className="px-6 py-4">
+                    {editingId === product.id ? (
+                      <input
+                        type="text"
+                        value={editValues.name}
+                        onChange={(e) => setEditValues({...editValues, name: e.target.value})}
+                        className="w-full px-2 py-1 border rounded"
+                      />
+                    ) : (
+                      <div>
+                        <p className="font-medium">{product.name}</p>
+                        {product.shopify_id && (
+                          <p className="text-xs text-gray-500">Shopify ID: {product.shopify_id}</p>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    {editingId === product.id ? (
+                      <input
+                        type="text"
+                        value={editValues.sku}
+                        onChange={(e) => setEditValues({...editValues, sku: e.target.value})}
+                        className="w-full px-2 py-1 border rounded"
+                      />
+                    ) : (
+                      <span className="text-sm">{product.sku}</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    {editingId === product.id ? (
+                      <div className="space-y-2">
+                        <input
+                          type="number"
+                          value={editValues.current_stock}
+                          onChange={(e) => setEditValues({...editValues, current_stock: parseInt(e.target.value)})}
+                          className="w-full px-2 py-1 border rounded"
+                          placeholder="Aktuell"
+                        />
+                        <input
+                          type="number"
+                          value={editValues.minimum_stock}
+                          onChange={(e) => setEditValues({...editValues, minimum_stock: parseInt(e.target.value)})}
+                          className="w-full px-2 py-1 border rounded"
+                          placeholder="Minimum"
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className={`font-medium ${
+                          product.current_stock <= product.minimum_stock ? 'text-red-600' : 'text-green-600'
+                        }`}>
+                          {product.current_stock}
+                        </span>
+                        <span className="text-gray-400">/</span>
+                        <span className="text-sm text-gray-600">{product.minimum_stock}</span>
+                        {product.current_stock <= product.minimum_stock && (
+                          <AlertTriangle className="h-4 w-4 text-orange-500" />
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="space-y-1">
+                      {product.locations && product.locations.length > 0 ? (
+                        product.locations.map(loc => (
+                          <div key={loc.id} className="flex items-center gap-2">
+                            <MapPin className="h-3 w-3 text-blue-500" />
+                            <span className="text-sm font-medium">{loc.location?.code}</span>
+                            <span className="text-xs text-gray-500">({loc.quantity}x)</span>
+                            {loc.is_primary && (
+                              <span className="text-xs bg-blue-100 text-blue-700 px-1 rounded">Haupt</span>
+                            )}
+                            <button
+                              onClick={() => removeProductLocation(product.id, loc.location_id)}
+                              className="ml-auto text-red-500 hover:text-red-700"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-sm text-gray-400">Kein Lagerplatz</span>
+                      )}
+                      <button
+                        onClick={() => setShowLocationModal(product)}
+                        className="text-blue-600 hover:text-blue-700 text-sm flex items-center gap-1"
+                      >
+                        <Plus className="h-3 w-3" />
+                        Lagerplatz hinzufügen
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-2">
+                      {editingId === product.id ? (
+                        <>
+                          <button
+                            onClick={() => handleSave(product.id)}
+                            className="text-green-600 hover:text-green-700"
+                            title="Speichern"
+                          >
+                            <Save className="h-5 w-5" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingId(null);
+                              setEditValues({});
+                            }}
+                            className="text-gray-600 hover:text-gray-700"
+                            title="Abbrechen"
+                          >
+                            <X className="h-5 w-5" />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => handleEdit(product)}
+                            className="text-blue-600 hover:text-blue-700"
+                            title="Bearbeiten"
+                          >
+                            <Edit className="h-5 w-5" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(product.id)}
+                            className="text-red-600 hover:text-red-700"
+                            title="Löschen"
+                          >
+                            <Trash2 className="h-5 w-5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
-        {/* Statistics */}
-        <div className="grid grid-cols-5 gap-4">
-          <div className="bg-gray-50 p-4 rounded-lg">
-            <p className="text-sm text-gray-600">Gesamt</p>
-            <p className="text-2xl font-bold">{totalProducts}</p>
-          </div>
-          <div className="bg-green-50 p-4 rounded-lg">
-            <p className="text-sm text-gray-600">Gefiltert</p>
-            <p className="text-2xl font-bold text-green-600">{filteredProducts.length}</p>
-          </div>
-          <div className="bg-red-50 p-4 rounded-lg">
-            <p className="text-sm text-gray-600">Kritisch</p>
-            <p className="text-2xl font-bold text-red-600">{criticalStock}</p>
-          </div>
-          <div className="bg-yellow-50 p-4 rounded-lg">
-            <p className="text-sm text-gray-600">Ohne Lagerplatz</p>
-            <p className="text-2xl font-bold text-yellow-600">{products.filter(p => !p.storage_location).length}</p>
-          </div>
-          <div className="bg-blue-50 p-4 rounded-lg">
-            <p className="text-sm text-gray-600">Gesamtwert</p>
-            <p className="text-2xl font-bold text-blue-600">€{totalValue.toFixed(2)}</p>
-          </div>
+        {/* Mobile Cards */}
+        <div className="md:hidden">
+          {filteredProducts.map((product) => (
+            <div key={product.id} className="border-b p-4">
+              <div className="flex justify-between items-start mb-2">
+                <div className="flex-1">
+                  <h3 className="font-medium">{product.name}</h3>
+                  <p className="text-sm text-gray-600">SKU: {product.sku}</p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleEdit(product)}
+                    className="text-blue-600"
+                  >
+                    <Edit className="h-5 w-5" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(product.id)}
+                    className="text-red-600"
+                  >
+                    <Trash2 className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <div>
+                  <p className="text-xs text-gray-500">Bestand</p>
+                  <p className={`font-medium ${
+                    product.current_stock <= product.minimum_stock ? 'text-red-600' : 'text-green-600'
+                  }`}>
+                    {product.current_stock} / {product.minimum_stock}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Lagerplätze</p>
+                  <div className="space-y-1">
+                    {product.locations && product.locations.length > 0 ? (
+                      product.locations.map(loc => (
+                        <div key={loc.id} className="text-sm">
+                          <MapPin className="h-3 w-3 text-blue-500 inline mr-1" />
+                          {loc.location?.code} ({loc.quantity})
+                        </div>
+                      ))
+                    ) : (
+                      <span className="text-sm text-gray-400">Keine</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              
+              <button
+                onClick={() => setShowLocationModal(product)}
+                className="text-blue-600 text-sm flex items-center gap-1"
+              >
+                <Plus className="h-3 w-3" />
+                Lagerplatz hinzufügen
+              </button>
+            </div>
+          ))}
         </div>
 
-        {/* Info Message for Bulk Edit */}
-        {bulkEditMode && (
-          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
-            <AlertCircle className="h-5 w-5 text-blue-600" />
-            <span className="text-sm text-blue-800">
-              Wählen Sie Produkte aus und klicken Sie auf "X Produkte bearbeiten" oder nutzen Sie direkt den "Bulk Edit" Button für alle Produkte.
-            </span>
+        {filteredProducts.length === 0 && (
+          <div className="text-center py-12">
+            <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-500">Keine Produkte gefunden</p>
           </div>
         )}
       </div>
 
-      {/* Products Table */}
-      <div className="bg-white rounded-lg shadow-md overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                {bulkEditMode && (
-                  <th className="px-6 py-3 text-left">
-                    <input
-                      type="checkbox"
-                      checked={selectedProducts.size === filteredProducts.length && filteredProducts.length > 0}
-                      onChange={toggleAllSelection}
-                      className="rounded"
-                    />
-                  </th>
-                )}
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Bild</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Produkt</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lagerplatz</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Bestand</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preis</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aktionen</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {filteredProducts.map((product) => {
-                const isEditing = editingId === product.id;
-                const stockStatus = getStockStatus(product.current_stock, product.min_stock);
-                const isSelected = selectedProducts.has(product.id);
-                
-                return (
-                  <tr key={product.id} className={`hover:bg-gray-50 ${isSelected ? 'bg-blue-50' : ''}`}>
-                    {bulkEditMode && (
-                      <td className="px-6 py-4">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleProductSelection(product.id)}
-                          className="rounded"
-                        />
-                      </td>
-                    )}
-                    <td className="px-6 py-4">
-                      {product.image_url ? (
-                        <img src={product.image_url} alt={product.name} className="h-12 w-12 object-cover rounded" />
-                      ) : (
-                        <div className="h-12 w-12 bg-gray-200 rounded flex items-center justify-center">
-                          <Package className="h-6 w-6 text-gray-400" />
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {isEditing ? (
-                        <input
-                          type="text"
-                          value={editForm?.name || ''}
-                          onChange={(e) => setEditForm({...editForm!, name: e.target.value})}
-                          className="px-2 py-1 border rounded"
-                        />
-                      ) : (
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">{product.name}</div>
-                          {product.shopify_id && (
-                            <div className="text-xs text-green-600 flex items-center gap-1 mt-1">
-                              <Check className="h-3 w-3" />
-                              Shopify
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">{product.sku}</td>
-                    <td className="px-6 py-4">
-                      {isEditing ? (
-                        <input
-                          type="text"
-                          value={editForm?.storage_location || ''}
-                          onChange={(e) => setEditForm({...editForm!, storage_location: e.target.value})}
-                          className="px-2 py-1 border rounded w-24"
-                        />
-                      ) : (
-                        <span className="text-sm text-gray-900">{product.storage_location || 'Kein Lagerplatz'}</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          value={editForm?.current_stock || 0}
-                          onChange={(e) => setEditForm({...editForm!, current_stock: parseInt(e.target.value) || 0})}
-                          className="px-2 py-1 border rounded w-20"
-                        />
-                      ) : (
-                        <div>
-                          <div className="text-sm font-medium">{product.current_stock}</div>
-                          <div className="text-xs text-gray-500">Min: {product.min_stock}</div>
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={editForm?.price || 0}
-                          onChange={(e) => setEditForm({...editForm!, price: parseFloat(e.target.value) || 0})}
-                          className="px-2 py-1 border rounded w-24"
-                        />
-                      ) : (
-                        <span className="text-sm font-medium">€{product.price.toFixed(2)}</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${stockStatus.color}`}>
-                        {stockStatus.text}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex gap-2">
-                        {isEditing ? (
-                          <>
-                            <button
-                              onClick={handleSave}
-                              className="text-green-600 hover:text-green-900"
-                            >
-                              <Save className="h-5 w-5" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                setEditingId(null);
-                                setEditForm(null);
-                              }}
-                              className="text-red-600 hover:text-red-900"
-                            >
-                              <X className="h-5 w-5" />
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => handleEdit(product)}
-                              className="text-blue-600 hover:text-blue-900"
-                              disabled={bulkEditMode}
-                            >
-                              <Edit className="h-5 w-5" />
-                            </button>
-                            <button
-                              className="text-red-600 hover:text-red-900"
-                              disabled={bulkEditMode}
-                            >
-                              <Trash2 className="h-5 w-5" />
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {/* Location Modal */}
+      {showLocationModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold mb-4">Lagerplatz hinzufügen</h2>
+            <p className="text-sm text-gray-600 mb-4">Für: {showLocationModal.name}</p>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Lagerplatz</label>
+                <select
+                  value={locationFormData.locationId}
+                  onChange={(e) => setLocationFormData({...locationFormData, locationId: e.target.value})}
+                  className="w-full px-3 py-2 border rounded-lg"
+                >
+                  <option value="">Wählen...</option>
+                  {locations.map(loc => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.code} - {loc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-1">Menge</label>
+                <input
+                  type="number"
+                  value={locationFormData.quantity}
+                  onChange={(e) => setLocationFormData({...locationFormData, quantity: parseInt(e.target.value)})}
+                  className="w-full px-3 py-2 border rounded-lg"
+                  min="0"
+                />
+              </div>
+              
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="isPrimary"
+                  checked={locationFormData.isPrimary}
+                  onChange={(e) => setLocationFormData({...locationFormData, isPrimary: e.target.checked})}
+                  className="mr-2"
+                />
+                <label htmlFor="isPrimary" className="text-sm">
+                  Als Haupt-Lagerplatz festlegen
+                </label>
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => {
+                  setShowLocationModal(null);
+                  setLocationFormData({ locationId: '', quantity: 0, isPrimary: false });
+                }}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                Abbrechen
+              </button>
+              <button
+                onClick={addProductLocation}
+                disabled={!locationFormData.locationId}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                Hinzufügen
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
