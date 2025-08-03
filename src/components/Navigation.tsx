@@ -15,13 +15,15 @@ import {
   Bell,
   User,
   LogOut,
-  Flame
+  Flame,
+  Edit3
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: Home },
   { href: '/products', label: 'Produkte', icon: Package },
+  { href: '/bulk-edit', label: 'Bulk Edit', icon: Edit3 },
   { href: '/order-picking', label: 'Kommissionierung', icon: ShoppingCart },
   { href: '/storage-locations', label: 'Lagerplätze', icon: Warehouse },
   { href: '/shopify-sync', label: 'Shopify Sync', icon: RefreshCw },
