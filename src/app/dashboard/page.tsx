@@ -301,15 +301,32 @@ export default function DashboardPage() {
               >
                 <RefreshCw size={32} className={syncing ? 'animate-spin' : ''} />
                 <span className="text-sm font-medium">
-                  {syncing ? 'Synchronisiere...' : 'Shopify Sync'}
+                  {syncing ? 'Synchronisiere...' : 'Produkte Sync'}
                 </span>
               </button>
               <button
-                onClick={() => toast.info('Scanner-Funktion kommt bald!')}
-                className="bg-teal-600 text-white p-4 rounded-lg hover:bg-teal-700 transition-colors flex flex-col items-center gap-2"
+                onClick={async () => {
+                  const loadingToast = toast.loading('Synchronisiere Bestellungen...');
+                  try {
+                    const response = await fetch('/api/shopify/sync-orders', { 
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' }
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                      toast.success(data.message || 'Bestellungen synchronisiert!', { id: loadingToast });
+                      await fetchDashboardData();
+                    } else {
+                      toast.error(data.error || 'Sync fehlgeschlagen', { id: loadingToast });
+                    }
+                  } catch (error) {
+                    toast.error('Fehler bei der Synchronisation', { id: loadingToast });
+                  }
+                }}
+                className="bg-yellow-600 text-white p-4 rounded-lg hover:bg-yellow-700 transition-colors flex flex-col items-center gap-2"
               >
-                <ScanLine size={32} />
-                <span className="text-sm font-medium">Barcode Scan</span>
+                <ShoppingCart size={32} />
+                <span className="text-sm font-medium">Orders Sync</span>
               </button>
             </div>
           );
