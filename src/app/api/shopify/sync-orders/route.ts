@@ -22,7 +22,7 @@ export async function GET() {
     
     console.log(`Synchronisiere unfulfilled Bestellungen ab ${startOfYear}...`);
     
-    let allOrders = []
+let allOrders: any[] = []
     let nextPageUrl = `${shopifyUrl}?status=any&fulfillment_status=unfulfilled&created_at_min=${startOfYear}&limit=250`
     
     // Hole alle Seiten von Shopify (Pagination)

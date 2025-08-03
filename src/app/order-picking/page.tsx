@@ -25,7 +25,7 @@ import {
   Printer,
   Check,
   X,
-  BarCode,
+  Barcode,
   Euro
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
