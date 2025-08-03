@@ -40,8 +40,8 @@ let nextPageUrl = `${shopifyUrl}?status=any&fulfillment_status=unfulfilled&creat
       const data = await response.json()
       
       // Filtere ausgeschlossene Kunden
-      const filteredOrders = data.orders.filter(order => {
-        const customerName = order.customer?.first_name && order.customer?.last_name 
+const filteredOrders = data.orders.filter((order: any) => {
+  const customerName = order.customer?.first_name && order.customer?.last_name 
           ? `${order.customer.first_name} ${order.customer.last_name}`
           : order.customer?.name || '';
           
