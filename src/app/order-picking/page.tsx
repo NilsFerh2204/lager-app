@@ -1,28 +1,21 @@
 'use client';
+
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
-  Package,
   ShoppingCart,
   User,
   MapPin,
   Calendar,
   CheckCircle,
-  Clock,
-  AlertCircle,
   Printer,
   ClipboardList,
   Search,
-  Filter,
   X,
-  ChevronRight,
-  Box,
   Loader2,
   RefreshCw,
   Check,
-  Truck,
-  FileText,
-  List
+  Package
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -40,8 +33,7 @@ interface OrderItem {
     name: string;
     storage_location: string | null;
     current_stock: number;
-  };
-  picked?: boolean;
+  } | null;
 }
 
 interface Order {
@@ -82,11 +74,14 @@ export default function OrderPickingPage() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'unfulfilled' | 'fulfilled'>('unfulfilled');
   const [viewMode, setViewMode] = useState<'orders' | 'picklist'>('orders');
   const [picklist, setPicklist] = useState<PicklistItem[]>([]);
-  const [pickingInProgress, setPickingInProgress] = useState(false);
 
- const fetchOrders = async () => {
+  useEffect(() => {
+    fetchOrders();
+  }, [filterStatus]);
+
+  const fetchOrders = async () => {
     try {
-      // Schritt 1: Orders laden (ohne Joins)
+      // Schritt 1: Orders laden
       let ordersQuery = supabase
         .from('orders')
         .select('*')
@@ -109,7 +104,7 @@ export default function OrderPickingPage() {
         return;
       }
 
-      // Schritt 2: Order Items separat laden
+      // Schritt 2: Order Items laden
       const orderIds = ordersData.map(o => o.id);
       const { data: itemsData, error: itemsError } = await supabase
         .from('order_items')
@@ -118,15 +113,14 @@ export default function OrderPickingPage() {
 
       if (itemsError) {
         console.error('Items fetch error:', itemsError);
-        // Trotzdem weitermachen, nur ohne Items
       }
 
-      // Schritt 3: Produkte laden (optional, für Lagerplätze)
-      let productsMap = new Map();
+      // Schritt 3: Produkte laden für Lagerplätze
+      const productsMap = new Map();
       if (itemsData && itemsData.length > 0) {
         const productIds = itemsData
           .map(item => item.product_id)
-          .filter(id => id !== null);
+          .filter((id): id is string => id !== null);
         
         if (productIds.length > 0) {
           const { data: productsData } = await supabase
@@ -148,7 +142,7 @@ export default function OrderPickingPage() {
           .filter(item => item.order_id === order.id)
           .map(item => ({
             ...item,
-            product: item.product_id ? productsMap.get(item.product_id) : null
+            product: item.product_id ? productsMap.get(item.product_id) || null : null
           }));
 
         return {
@@ -158,7 +152,7 @@ export default function OrderPickingPage() {
       });
 
       setOrders(ordersWithItems);
-      console.log(`Loaded ${ordersWithItems.length} orders with items`);
+      console.log(`Loaded ${ordersWithItems.length} orders`);
       
     } catch (error: any) {
       console.error('Error fetching orders:', error);
@@ -169,7 +163,37 @@ export default function OrderPickingPage() {
     }
   };
 
-    // Sammle alle Items aus ausgewählten Bestellungen
+  const syncOrders = async () => {
+    setSyncing(true);
+    const loadingToast = toast.loading('Synchronisiere Bestellungen...');
+    
+    try {
+      const response = await fetch('/api/shopify/sync-orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok && data.success) {
+        toast.success(data.message || 'Bestellungen synchronisiert!', { id: loadingToast });
+        await fetchOrders();
+      } else {
+        toast.error(data.error || 'Synchronisation fehlgeschlagen', { id: loadingToast });
+      }
+    } catch (error) {
+      toast.error('Fehler bei der Synchronisation', { id: loadingToast });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const generatePicklist = () => {
+    if (selectedOrders.size === 0) {
+      toast.error('Bitte wählen Sie mindestens eine Bestellung aus');
+      return;
+    }
+
     const itemsMap = new Map<string, PicklistItem>();
     
     orders
@@ -180,7 +204,7 @@ export default function OrderPickingPage() {
           
           if (!itemsMap.has(key)) {
             itemsMap.set(key, {
-              sku: item.sku,
+              sku: item.sku || '',
               title: item.title,
               storage_location: item.product?.storage_location || 'Kein Lagerplatz',
               total_quantity: 0,
@@ -199,9 +223,7 @@ export default function OrderPickingPage() {
         });
       });
 
-    // Sortiere nach Lagerplatz für optimale Laufroute
     const sortedItems = Array.from(itemsMap.values()).sort((a, b) => {
-      // Erst nach Lagerplatz, dann nach SKU
       if (a.storage_location === 'Kein Lagerplatz' && b.storage_location !== 'Kein Lagerplatz') return 1;
       if (a.storage_location !== 'Kein Lagerplatz' && b.storage_location === 'Kein Lagerplatz') return -1;
       if (a.storage_location < b.storage_location) return -1;
@@ -211,7 +233,6 @@ export default function OrderPickingPage() {
 
     setPicklist(sortedItems);
     setViewMode('picklist');
-    setPickingInProgress(true);
     toast.success(`Pickliste mit ${sortedItems.length} Positionen erstellt`);
   };
 
@@ -220,7 +241,6 @@ export default function OrderPickingPage() {
     updatedPicklist[index].picked = !updatedPicklist[index].picked;
     setPicklist(updatedPicklist);
 
-    // Prüfe ob alle gepickt
     const allPicked = updatedPicklist.every(item => item.picked);
     if (allPicked) {
       toast.success('Alle Artikel gepickt! Bereit zum Verpacken.');
@@ -238,7 +258,6 @@ export default function OrderPickingPage() {
     const loadingToast = toast.loading('Aktualisiere Bestellstatus...');
     
     try {
-      // Update alle ausgewählten Bestellungen auf fulfilled
       const updatePromises = Array.from(selectedOrders).map(orderId => 
         supabase
           .from('orders')
@@ -250,21 +269,15 @@ export default function OrderPickingPage() {
       );
 
       await Promise.all(updatePromises);
-
-      // Optional: Update zu Shopify senden (wenn API vorhanden)
-      // await updateShopifyFulfillment(selectedOrders);
-
       toast.success('Bestellungen als erfüllt markiert!', { id: loadingToast });
       
-      // Reset
       setSelectedOrders(new Set());
       setPicklist([]);
       setViewMode('orders');
-      setPickingInProgress(false);
       await fetchOrders();
       
     } catch (error) {
-      toast.error('Fehler beim Aktualisieren der Bestellungen', { id: loadingToast });
+      toast.error('Fehler beim Aktualisieren', { id: loadingToast });
       console.error(error);
     }
   };
@@ -275,12 +288,12 @@ export default function OrderPickingPage() {
         <head>
           <title>Pickliste - ${new Date().toLocaleDateString('de-DE')}</title>
           <style>
-            body { font-family: Arial, sans-serif; }
+            body { font-family: Arial, sans-serif; padding: 20px; }
             h1 { font-size: 24px; margin-bottom: 20px; }
             table { width: 100%; border-collapse: collapse; }
             th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
             th { background-color: #f2f2f2; }
-            .location { font-weight: bold; font-size: 16px; }
+            .location { font-weight: bold; font-size: 16px; color: #1e40af; }
             .checkbox { width: 30px; height: 30px; border: 2px solid #000; display: inline-block; }
             @media print { 
               .no-print { display: none; }
@@ -289,15 +302,16 @@ export default function OrderPickingPage() {
         </head>
         <body>
           <h1>Pickliste - ${new Date().toLocaleDateString('de-DE')} ${new Date().toLocaleTimeString('de-DE')}</h1>
-          <p>Bestellungen: ${Array.from(selectedOrders).length}</p>
+          <p><strong>Anzahl Bestellungen:</strong> ${Array.from(selectedOrders).length}</p>
+          <p><strong>Anzahl Positionen:</strong> ${picklist.length}</p>
           <table>
             <thead>
               <tr>
-                <th>✓</th>
-                <th>Lagerplatz</th>
-                <th>SKU</th>
+                <th style="width: 50px;">✓</th>
+                <th style="width: 150px;">Lagerplatz</th>
+                <th style="width: 120px;">SKU</th>
                 <th>Artikel</th>
-                <th>Menge</th>
+                <th style="width: 80px;">Menge</th>
                 <th>Bestellungen</th>
               </tr>
             </thead>
@@ -308,12 +322,17 @@ export default function OrderPickingPage() {
                   <td class="location">${item.storage_location}</td>
                   <td>${item.sku}</td>
                   <td>${item.title}</td>
-                  <td><strong>${item.total_quantity}</strong></td>
-                  <td>${item.orders.map(o => `#${o.order_number} (${o.quantity}x)`).join(', ')}</td>
+                  <td style="text-align: center;"><strong>${item.total_quantity}</strong></td>
+                  <td style="font-size: 12px;">${item.orders.map(o => `#${o.order_number} (${o.quantity}x)`).join(', ')}</td>
                 </tr>
               `).join('')}
             </tbody>
           </table>
+          <div style="margin-top: 40px; border-top: 2px solid #000; padding-top: 20px;">
+            <p><strong>Gepickt von:</strong> _________________________</p>
+            <p><strong>Datum/Zeit:</strong> _________________________</p>
+            <p><strong>Unterschrift:</strong> _________________________</p>
+          </div>
         </body>
       </html>
     `;
@@ -322,7 +341,7 @@ export default function OrderPickingPage() {
     if (printWindow) {
       printWindow.document.write(printContent);
       printWindow.document.close();
-      printWindow.print();
+      setTimeout(() => printWindow.print(), 250);
     }
   };
 
@@ -396,7 +415,6 @@ export default function OrderPickingPage() {
                 <button
                   onClick={() => {
                     setViewMode('orders');
-                    setPickingInProgress(false);
                     setPicklist([]);
                   }}
                   className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2"
@@ -447,7 +465,7 @@ export default function OrderPickingPage() {
                 <div 
                   className="bg-green-600 h-4 rounded-full transition-all"
                   style={{ 
-                    width: `${(picklist.filter(item => item.picked).length / picklist.length) * 100}%` 
+                    width: `${picklist.length > 0 ? (picklist.filter(item => item.picked).length / picklist.length) * 100 : 0}%` 
                   }}
                 />
               </div>
@@ -498,7 +516,7 @@ export default function OrderPickingPage() {
                       <div className="text-xs space-y-1">
                         {item.orders.map((o, i) => (
                           <div key={i}>
-                            #{o.order_number} ({o.quantity}x) - {o.customer_name}
+                            #{o.order_number} ({o.quantity}x)
                           </div>
                         ))}
                       </div>
@@ -546,102 +564,112 @@ export default function OrderPickingPage() {
 
           {/* Orders List */}
           <div className="space-y-4">
-            {filteredOrders.map(order => (
-              <div 
-                key={order.id}
-                className={`bg-white rounded-lg shadow-md p-6 transition-all ${
-                  selectedOrders.has(order.id) ? 'ring-2 ring-blue-500' : ''
-                }`}
-              >
-                <div className="flex justify-between items-start mb-4">
-                  <div className="flex items-start gap-4">
-                    <input
-                      type="checkbox"
-                      checked={selectedOrders.has(order.id)}
-                      onChange={(e) => {
-                        const newSelection = new Set(selectedOrders);
-                        if (e.target.checked) {
-                          newSelection.add(order.id);
-                        } else {
-                          newSelection.delete(order.id);
-                        }
-                        setSelectedOrders(newSelection);
-                      }}
-                      className="mt-1 w-5 h-5 rounded border-gray-300"
-                      disabled={order.fulfillment_status === 'fulfilled'}
-                    />
-                    
-                    <div>
-                      <h3 className="text-lg font-semibold">
-                        Bestellung #{order.order_number}
-                      </h3>
-                      <div className="flex items-center gap-4 text-sm text-gray-600 mt-1">
-                        <span className="flex items-center gap-1">
-                          <User className="h-4 w-4" />
-                          {order.customer_name}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <MapPin className="h-4 w-4" />
-                          {order.shipping_city || 'Keine Adresse'}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Calendar className="h-4 w-4" />
-                          {new Date(order.shopify_created_at).toLocaleDateString('de-DE')}
-                        </span>
+            {filteredOrders.length === 0 ? (
+              <div className="bg-white rounded-lg shadow-md p-12 text-center">
+                <Package className="h-16 w-16 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-xl font-semibold text-gray-600 mb-2">Keine Bestellungen gefunden</h3>
+                <p className="text-gray-500">
+                  {searchTerm ? 'Versuchen Sie eine andere Suche' : 'Synchronisieren Sie Bestellungen von Shopify'}
+                </p>
+              </div>
+            ) : (
+              filteredOrders.map(order => (
+                <div 
+                  key={order.id}
+                  className={`bg-white rounded-lg shadow-md p-6 transition-all ${
+                    selectedOrders.has(order.id) ? 'ring-2 ring-blue-500' : ''
+                  }`}
+                >
+                  <div className="flex justify-between items-start mb-4">
+                    <div className="flex items-start gap-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedOrders.has(order.id)}
+                        onChange={(e) => {
+                          const newSelection = new Set(selectedOrders);
+                          if (e.target.checked) {
+                            newSelection.add(order.id);
+                          } else {
+                            newSelection.delete(order.id);
+                          }
+                          setSelectedOrders(newSelection);
+                        }}
+                        className="mt-1 w-5 h-5 rounded border-gray-300"
+                        disabled={order.fulfillment_status === 'fulfilled'}
+                      />
+                      
+                      <div>
+                        <h3 className="text-lg font-semibold">
+                          Bestellung #{order.order_number}
+                        </h3>
+                        <div className="flex items-center gap-4 text-sm text-gray-600 mt-1">
+                          <span className="flex items-center gap-1">
+                            <User className="h-4 w-4" />
+                            {order.customer_name}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <MapPin className="h-4 w-4" />
+                            {order.shipping_city || 'Keine Adresse'}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Calendar className="h-4 w-4" />
+                            {new Date(order.shopify_created_at).toLocaleDateString('de-DE')}
+                          </span>
+                        </div>
                       </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                        order.fulfillment_status === 'fulfilled'
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-orange-100 text-orange-800'
+                      }`}>
+                        {order.fulfillment_status === 'fulfilled' ? 'Erfüllt' : 'Offen'}
+                      </span>
+                      <span className="text-lg font-bold">
+                        €{Number(order.total_price).toFixed(2)}
+                      </span>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                      order.fulfillment_status === 'fulfilled'
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-orange-100 text-orange-800'
-                    }`}>
-                      {order.fulfillment_status === 'fulfilled' ? 'Erfüllt' : 'Offen'}
-                    </span>
-                    <span className="text-lg font-bold">
-                      €{order.total_price.toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Order Items */}
-                <div className="border-t pt-4">
-                  <h4 className="font-medium mb-2">Artikel ({order.order_items.length})</h4>
-                  <div className="space-y-2">
-                    {order.order_items.map(item => (
-                      <div key={item.id} className="flex justify-between items-center py-2 border-b last:border-0">
-                        <div className="flex-1">
-                          <p className="font-medium">{item.title}</p>
-                          <div className="flex items-center gap-4 text-sm text-gray-600">
-                            <span>SKU: {item.sku}</span>
-                            {item.product?.storage_location && (
-                              <span className="flex items-center gap-1 text-blue-600">
-                                <MapPin className="h-3 w-3" />
-                                {item.product.storage_location}
-                              </span>
-                            )}
+                  {/* Order Items */}
+                  <div className="border-t pt-4">
+                    <h4 className="font-medium mb-2">Artikel ({order.order_items.length})</h4>
+                    <div className="space-y-2">
+                      {order.order_items.map(item => (
+                        <div key={item.id} className="flex justify-between items-center py-2 border-b last:border-0">
+                          <div className="flex-1">
+                            <p className="font-medium">{item.title}</p>
+                            <div className="flex items-center gap-4 text-sm text-gray-600">
+                              <span>SKU: {item.sku}</span>
+                              {item.product?.storage_location && (
+                                <span className="flex items-center gap-1 text-blue-600">
+                                  <MapPin className="h-3 w-3" />
+                                  {item.product.storage_location}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-bold">{item.quantity}x</p>
+                            <p className="text-sm text-gray-600">€{Number(item.price).toFixed(2)}</p>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <p className="font-bold">{item.quantity}x</p>
-                          <p className="text-sm text-gray-600">€{item.price.toFixed(2)}</p>
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
 
-                {order.note && (
-                  <div className="mt-4 p-3 bg-yellow-50 rounded-lg">
-                    <p className="text-sm text-yellow-800">
-                      <strong>Notiz:</strong> {order.note}
-                    </p>
-                  </div>
-                )}
-              </div>
-            ))}
+                  {order.note && (
+                    <div className="mt-4 p-3 bg-yellow-50 rounded-lg">
+                      <p className="text-sm text-yellow-800">
+                        <strong>Notiz:</strong> {order.note}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         </>
       )}
