@@ -23,11 +23,7 @@ export async function GET() {
     console.log(`Synchronisiere unfulfilled Bestellungen ab ${startOfYear}...`);
     
 let allOrders: any[] = []
-<<<<<<< HEAD
-    let nextPageUrl = `${shopifyUrl}?status=any&fulfillment_status=unfulfilled&created_at_min=${startOfYear}&limit=250`
-=======
-  let nextPageUrl = `${shopifyUrl}?status=any&fulfillment_status=unfulfilled&created_at_min=${startOfYear}&limit=250`
->>>>>>> 4bdd561cff962a1ff4f50e42db74cfee9e912b25
+let nextPageUrl = `${shopifyUrl}?status=any&fulfillment_status=unfulfilled&created_at_min=${startOfYear}&limit=250`
     
     // Hole alle Seiten von Shopify (Pagination)
     while (nextPageUrl) {
@@ -44,8 +40,8 @@ let allOrders: any[] = []
       const data = await response.json()
       
       // Filtere ausgeschlossene Kunden
-      const filteredOrders = data.orders.filter(order => {
-        const customerName = order.customer?.first_name && order.customer?.last_name 
+const filteredOrders = data.orders.filter((order: any) => {
+  const customerName = order.customer?.first_name && order.customer?.last_name 
           ? `${order.customer.first_name} ${order.customer.last_name}`
           : order.customer?.name || '';
           
@@ -71,7 +67,7 @@ let allOrders: any[] = []
       
       // Check for next page
       const linkHeader = response.headers.get('Link')
-      nextPageUrl = null
+nextPageUrl = ''
       
       if (linkHeader) {
         const matches = linkHeader.match(/<([^>]+)>; rel="next"/)
