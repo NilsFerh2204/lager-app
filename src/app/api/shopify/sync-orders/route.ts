@@ -1,104 +1,80 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
-export async function POST(request: NextRequest) {
+const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
+const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2024-01';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+export async function GET() {
+  return NextResponse.json({ 
+    status: 'ready',
+    endpoint: '/api/shopify/sync-orders',
+    method: 'POST',
+    description: 'Synchronisiert Bestellungen von Shopify'
+  });
+}
+
+export async function POST() {
   try {
-    // Get environment variables at runtime
-    const shopDomain = process.env.SHOPIFY_STORE_DOMAIN || '';
-    const accessToken = process.env.SHOPIFY_ACCESS_TOKEN || '';
-    const apiVersion = process.env.SHOPIFY_API_VERSION || '2024-01';
-    
-    if (!shopDomain || !accessToken) {
-      return NextResponse.json(
-        { success: false, error: 'Shopify credentials missing' },
-        { status: 500 }
-      );
+    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ACCESS_TOKEN) {
+      throw new Error('Shopify credentials missing');
     }
 
-    // Dynamic import Supabase
-    const { createClient } = await import('@supabase/supabase-js');
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-    
-    if (!supabaseUrl || !supabaseKey) {
-      return NextResponse.json(
-        { success: false, error: 'Supabase configuration missing' },
-        { status: 500 }
-      );
-    }
-    
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    console.log('Starting orders sync from Shopify...');
 
-    // Zeitraum für Bestellungen (letzte 90 Tage)
-    const ninetyDaysAgo = new Date();
-    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-    const startDate = ninetyDaysAgo.toISOString();
+    // Fetch orders from Shopify (last 90 days)
+    const sinceDate = new Date();
+    sinceDate.setDate(sinceDate.getDate() - 90);
     
-    console.log(`Synchronisiere Bestellungen ab ${startDate}...`);
+    const ordersUrl = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/orders.json?status=any&limit=250&created_at_min=${sinceDate.toISOString()}`;
     
-    // Alle Bestellungen mit Pagination holen
-    let allOrders: any[] = [];
-    let nextPageUrl: string | null = `https://${shopDomain}/admin/api/${apiVersion}/orders.json?status=any&created_at_min=${startDate}&limit=250`;
-    let pageCount = 0;
-    
-    while (nextPageUrl && pageCount < 20) { // Max 20 Seiten (5000 Bestellungen)
-      pageCount++;
-      console.log(`Fetching page ${pageCount}...`);
-      
-      const response = await fetch(nextPageUrl, {
-        headers: {
-          'X-Shopify-Access-Token': accessToken,
-          'Content-Type': 'application/json',
-        },
-      });
+    const ordersResponse = await fetch(ordersUrl, {
+      headers: {
+        'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
+        'Content-Type': 'application/json',
+      },
+    });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Shopify API error:', response.status, errorText);
-        throw new Error(`Shopify API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      allOrders = [...allOrders, ...(data.orders || [])];
-      
-      // Check for next page
-      const linkHeader = response.headers.get('Link');
-      nextPageUrl = null;
-      
-      if (linkHeader) {
-        const matches = linkHeader.match(/<([^>]+)>; rel="next"/);
-        if (matches && matches[1]) {
-          nextPageUrl = matches[1];
-        }
-      }
+    if (!ordersResponse.ok) {
+      const errorText = await ordersResponse.text();
+      console.error('Shopify API Error:', errorText);
+      throw new Error(`Shopify API error: ${ordersResponse.status}`);
     }
 
-    console.log(`Total orders fetched: ${allOrders.length}`);
+    const ordersData = await ordersResponse.json();
+    const orders = ordersData.orders || [];
 
-    // Bestellungen in Datenbank speichern
+    console.log(`Fetched ${orders.length} orders from Shopify`);
+
     let syncedCount = 0;
     let errorCount = 0;
-    let itemsSynced = 0;
-    
-    for (const order of allOrders) {
+
+    // Process each order
+    for (const order of orders) {
       try {
-        // Order Hauptdaten
+        // Prepare order data
         const orderData = {
-          shopify_id: String(order.id),
-          order_number: String(order.order_number || order.name),
-          email: order.email || '',
-          status: order.financial_status || 'pending',
+          shopify_id: order.id.toString(),
+          order_number: order.order_number?.toString() || order.name,
+          email: order.email || order.contact_email,
+          status: order.cancelled_at ? 'cancelled' : 'active',
           fulfillment_status: order.fulfillment_status || 'unfulfilled',
           financial_status: order.financial_status || 'pending',
-          total_price: parseFloat(order.total_price || '0'),
-          subtotal_price: parseFloat(order.subtotal_price || '0'),
-          total_tax: parseFloat(order.total_tax || '0'),
+          total_price: parseFloat(order.total_price || 0),
+          subtotal_price: parseFloat(order.subtotal_price || 0),
+          total_tax: parseFloat(order.total_tax || 0),
           currency: order.currency || 'EUR',
-          customer_name: order.customer ? 
-            `${order.customer.first_name || ''} ${order.customer.last_name || ''}`.trim() || 
-            order.customer.name || 'Gast' : 'Gast',
-          customer_email: order.customer?.email || order.email,
-          customer_phone: order.customer?.phone || order.phone,
-          shipping_name: order.shipping_address?.name,
+          customer_name: order.customer ? `${order.customer.first_name || ''} ${order.customer.last_name || ''}`.trim() : 
+                        order.billing_address ? `${order.billing_address.first_name || ''} ${order.billing_address.last_name || ''}`.trim() : 
+                        'Unbekannt',
+          customer_email: order.customer?.email || order.email || order.contact_email,
+          customer_phone: order.customer?.phone || order.phone || order.billing_address?.phone,
+          shipping_name: order.shipping_address ? `${order.shipping_address.first_name || ''} ${order.shipping_address.last_name || ''}`.trim() : null,
           shipping_address1: order.shipping_address?.address1,
           shipping_address2: order.shipping_address?.address2,
           shipping_city: order.shipping_address?.city,
@@ -110,116 +86,87 @@ export async function POST(request: NextRequest) {
           tags: order.tags,
           shopify_created_at: order.created_at,
           shopify_updated_at: order.updated_at,
-          updated_at: new Date().toISOString()
         };
 
-        // Upsert Order
+        // Upsert order
         const { data: upsertedOrder, error: orderError } = await supabase
           .from('orders')
-          .upsert(orderData, {
-            onConflict: 'shopify_id'
-          })
+          .upsert(orderData, { onConflict: 'shopify_id' })
           .select()
           .single();
 
         if (orderError) {
-          console.error('Error upserting order:', orderError);
+          console.error(`Error upserting order ${order.order_number}:`, orderError);
           errorCount++;
           continue;
         }
 
-        // Order Items synchronisieren
-        if (upsertedOrder && order.line_items) {
-          // Alte Items löschen
+        // Process line items
+        if (order.line_items && order.line_items.length > 0) {
+          // Delete existing line items for this order
           await supabase
             .from('order_items')
             .delete()
             .eq('order_id', upsertedOrder.id);
 
-          // Neue Items einfügen
-          for (const item of order.line_items) {
-            try {
-              // Versuche Produkt über SKU zu finden
-              let productId = null;
-              if (item.sku) {
-                const { data: product } = await supabase
-                  .from('products')
-                  .select('id')
-                  .eq('sku', item.sku)
-                  .single();
-                
-                if (product) {
-                  productId = product.id;
-                }
-              }
-
-              const itemData = {
-                order_id: upsertedOrder.id,
-                product_id: productId,
-                shopify_line_item_id: String(item.id),
-                shopify_product_id: item.product_id ? String(item.product_id) : null,
-                shopify_variant_id: item.variant_id ? String(item.variant_id) : null,
-                title: item.title || '',
-                variant_title: item.variant_title,
-                sku: item.sku || '',
-                quantity: item.quantity || 1,
-                price: parseFloat(item.price || '0'),
-                total_discount: parseFloat(item.total_discount || '0'),
-                vendor: item.vendor,
-                fulfillment_status: item.fulfillment_status || 'unfulfilled',
-                requires_shipping: item.requires_shipping !== false
-              };
-
-              const { error: itemError } = await supabase
-                .from('order_items')
-                .insert(itemData);
-
-              if (!itemError) {
-                itemsSynced++;
-              } else {
-                console.error('Error inserting order item:', itemError);
-              }
-            } catch (itemError) {
-              console.error('Error processing order item:', itemError);
+          // Prepare line items
+          const lineItems = await Promise.all(order.line_items.map(async (item: any) => {
+            // Try to find the product by SKU
+            let productId = null;
+            if (item.sku) {
+              const { data: product } = await supabase
+                .from('products')
+                .select('id')
+                .eq('sku', item.sku)
+                .single();
+              
+              productId = product?.id || null;
             }
+
+            return {
+              order_id: upsertedOrder.id,
+              product_id: productId,
+              shopify_line_item_id: item.id?.toString(),
+              shopify_product_id: item.product_id?.toString(),
+              shopify_variant_id: item.variant_id?.toString(),
+              title: item.title || item.name || 'Unbekanntes Produkt',
+              variant_title: item.variant_title,
+              sku: item.sku || '',
+              quantity: parseInt(item.quantity || 1),
+              price: parseFloat(item.price || 0),
+              total_discount: parseFloat(item.total_discount || 0),
+              vendor: item.vendor,
+              fulfillment_status: item.fulfillment_status,
+              requires_shipping: item.requires_shipping !== false,
+            };
+          }));
+
+          // Insert line items
+          const { error: itemsError } = await supabase
+            .from('order_items')
+            .insert(lineItems);
+
+          if (itemsError) {
+            console.error(`Error inserting line items for order ${order.order_number}:`, itemsError);
+            errorCount++;
           }
         }
 
         syncedCount++;
       } catch (error) {
-        console.error('Error syncing order:', error);
+        console.error(`Error processing order ${order.order_number}:`, error);
         errorCount++;
       }
     }
 
-    // Statistiken berechnen
-    const { count: totalOrders } = await supabase
-      .from('orders')
-      .select('*', { count: 'exact', head: true });
-
-    const { count: unfulfilledOrders } = await supabase
-      .from('orders')
-      .select('*', { count: 'exact', head: true })
-      .eq('fulfillment_status', 'unfulfilled');
-
-    const message = `Synchronisation abgeschlossen: ${syncedCount} Bestellungen synchronisiert, ${itemsSynced} Artikel verarbeitet`;
-    console.log(message);
+    console.log(`Orders sync completed: ${syncedCount} synced, ${errorCount} errors`);
 
     return NextResponse.json({
       success: true,
-      message,
-      results: {
-        ordersProcessed: allOrders.length,
-        ordersSynced: syncedCount,
-        itemsSynced,
-        errors: errorCount,
-        totalOrders,
-        unfulfilledOrders,
-        dateRange: {
-          from: startDate,
-          to: new Date().toISOString()
-        }
-      }
+      message: `${syncedCount} Bestellungen synchronisiert${errorCount > 0 ? `, ${errorCount} Fehler` : ''}`,
+      synced: syncedCount,
+      errors: errorCount,
+      total: orders.length
     });
 
   } catch (error: any) {
@@ -227,20 +174,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { 
         success: false, 
-        error: error.message || 'Orders sync failed',
+        error: error.message || 'Sync fehlgeschlagen',
         details: error.toString()
       },
       { status: 500 }
     );
   }
-}
-
-// Health check endpoint
-export async function GET() {
-  return NextResponse.json({ 
-    status: 'ready',
-    endpoint: '/api/shopify/sync-orders',
-    method: 'POST',
-    description: 'Synchronisiert Bestellungen der letzten 90 Tage von Shopify'
-  });
 }
