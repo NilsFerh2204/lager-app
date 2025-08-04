@@ -18,7 +18,7 @@ export default function MobileLayout({
   return (
     <div className="min-h-screen bg-gray-900">
       <MobileNavigation />
-      <main className="pb-20"> {/* Removed pt-16 */}
+      <main className="pb-20">
         {children}
       </main>
       <Toaster 

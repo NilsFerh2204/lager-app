@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Toaster } from 'react-hot-toast';
-import ClientLayout from '@/components/ClientLayout';
 
 export const metadata: Metadata = {
   title: "Lagerverwaltung - Feuerwerk Management",
@@ -42,9 +41,7 @@ export default function RootLayout({
         }} />
       </head>
       <body className="antialiased bg-gray-50">
-        <ClientLayout>
-          {children}
-        </ClientLayout>
+        {children}
         <Toaster position="top-right" />
       </body>
     </html>
