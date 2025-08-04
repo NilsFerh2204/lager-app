@@ -15,13 +15,10 @@ import {
   Loader2,
   Home,
   ShoppingCart,
-  ClipboardList,
   QrCode,
-  Database,
-  CameraOff,
   Save,
-  SwitchCamera,
-  Flashlight
+  CameraOff,
+  SwitchCamera
 } from 'lucide-react';
 import Link from 'next/link';
 import { BrowserMultiFormatReader } from '@zxing/library';
@@ -44,90 +41,62 @@ export default function MobileScannerPage() {
   const [quantity, setQuantity] = useState(1);
   const [adjustmentType, setAdjustmentType] = useState<'add' | 'remove' | 'set'>('add');
   const [loading, setLoading] = useState(false);
-  const [manualMode, setManualMode] = useState(false);
-  const [currentCamera, setCurrentCamera] = useState<'user' | 'environment'>('environment');
-  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
   const [showCreateProduct, setShowCreateProduct] = useState(false);
   const [newProductName, setNewProductName] = useState('');
-  const [torchOn, setTorchOn] = useState(false);
+  const [currentCamera, setCurrentCamera] = useState<'environment' | 'user'>('environment');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    // Get available cameras on mount
-    getAvailableCameras();
-    
-    // Cleanup on unmount
     return () => {
       stopCamera();
     };
   }, []);
 
-  const getAvailableCameras = async () => {
+  const startCamera = async () => {
     try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = devices.filter(device => device.kind === 'videoinput');
-      setAvailableCameras(videoDevices);
-    } catch (error) {
-      console.error('Error getting cameras:', error);
-    }
-  };
-
-  const startCamera = async (preferredCamera?: 'user' | 'environment') => {
-    try {
-      // Stop any existing camera first
       stopCamera();
-
-      const cameraMode = preferredCamera || currentCamera;
       
-      // Try to get the specific camera
-      const constraints: MediaStreamConstraints = {
+      // Request camera permission
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: cameraMode,
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
+          facingMode: currentCamera,
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
         },
-        audio: false
-      };
+        audio: false // NO AUDIO!
+      });
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = mediaStream;
+      streamRef.current = stream;
       
       if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('playsinline', '');
+        videoRef.current.setAttribute('muted', '');
         
-        // Apply torch if supported
-        const track = mediaStream.getVideoTracks()[0];
-        if ('torch' in track.getCapabilities()) {
-          await track.applyConstraints({
-            advanced: [{ torch: torchOn } as any]
-          });
-        }
+        await videoRef.current.play();
         
-        // Start scanning
+        // Initialize barcode reader
         if (!readerRef.current) {
           readerRef.current = new BrowserMultiFormatReader();
         }
 
         setIsScanning(true);
-
-        // Scan continuously
-        intervalRef.current = setInterval(async () => {
-          if (!videoRef.current || !readerRef.current) {
-            return;
-          }
-
-          try {
-            const result = await readerRef.current.decodeOnceFromVideoElement(videoRef.current);
-            if (result) {
-              const code = result.getText();
-              handleBarcodeDetected(code);
+        
+        // Start scanning interval
+        scanIntervalRef.current = setInterval(async () => {
+          if (videoRef.current && readerRef.current) {
+            try {
+              const result = await readerRef.current.decodeOnceFromVideoElement(videoRef.current);
+              if (result) {
+                handleBarcodeDetected(result.getText());
+              }
+            } catch (err) {
+              // No barcode found, continue scanning
             }
-          } catch (err) {
-            // No barcode found, continue scanning
           }
         }, 500);
       }
@@ -138,51 +107,31 @@ export default function MobileScannerPage() {
     }
   };
 
-  const switchCamera = async () => {
-    const newCamera = currentCamera === 'environment' ? 'user' : 'environment';
-    setCurrentCamera(newCamera);
-    
-    if (isScanning) {
-      await startCamera(newCamera);
-    }
-  };
-
-  const toggleTorch = async () => {
-    if (streamRef.current) {
-      const track = streamRef.current.getVideoTracks()[0];
-      if ('torch' in track.getCapabilities()) {
-        const newTorchState = !torchOn;
-        setTorchOn(newTorchState);
-        await track.applyConstraints({
-          advanced: [{ torch: newTorchState } as any]
-        });
-      } else {
-        toast.error('Taschenlampe nicht verfügbar');
-      }
-    }
-  };
-
   const stopCamera = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+    // Clear scanning interval
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
     }
 
+    // Stop all video tracks
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach(track => {
+        track.stop();
+      });
       streamRef.current = null;
     }
-    
+
+    // Clear video element
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-    
+
     setIsScanning(false);
-    setTorchOn(false);
   };
 
   const handleBarcodeDetected = async (code: string) => {
-    // Stop camera immediately
+    // Stop scanning immediately
     stopCamera();
     
     // Vibration feedback
@@ -191,25 +140,26 @@ export default function MobileScannerPage() {
     }
     
     setScannedCode(code);
-    await searchProduct(code);
+    await checkProduct(code);
   };
 
-  const searchProduct = async (searchTerm: string) => {
+  const checkProduct = async (barcode: string) => {
     setLoading(true);
     try {
-      // Search for product by barcode or SKU
+      // Check if product exists with this barcode
       const { data, error } = await supabase
         .from('products')
         .select('*')
-        .or(`sku.eq.${searchTerm},barcode.eq.${searchTerm}`)
+        .eq('barcode', barcode)
         .single();
 
       if (error || !data) {
-        // Product not found - offer to create new product
+        // No product found - offer to create
         setShowCreateProduct(true);
         setProduct(null);
-        toast.error('Produkt nicht gefunden');
+        toast.info('Neuer Barcode - Produkt anlegen?');
       } else {
+        // Product found
         setProduct(data);
         setShowCreateProduct(false);
         toast.success(`Gefunden: ${data.name}`);
@@ -235,11 +185,11 @@ export default function MobileScannerPage() {
         .from('products')
         .insert({
           name: newProductName,
-          sku: scannedCode,
+          sku: `SKU-${scannedCode}`, // Generate SKU from barcode
           barcode: scannedCode,
           current_stock: 0,
           minimum_stock: 10,
-          shopify_id: null
+          shopify_variant_id: null
         })
         .select()
         .single();
@@ -256,14 +206,6 @@ export default function MobileScannerPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleManualSearch = async () => {
-    if (!scannedCode.trim()) {
-      toast.error('Bitte Barcode eingeben');
-      return;
-    }
-    await searchProduct(scannedCode);
   };
 
   const adjustStock = async () => {
@@ -310,6 +252,15 @@ export default function MobileScannerPage() {
     }
   };
 
+  const switchCamera = async () => {
+    const newCamera = currentCamera === 'environment' ? 'user' : 'environment';
+    setCurrentCamera(newCamera);
+    
+    if (isScanning) {
+      await startCamera();
+    }
+  };
+
   const resetScanner = () => {
     setProduct(null);
     setScannedCode('');
@@ -320,113 +271,67 @@ export default function MobileScannerPage() {
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
-      {/* Main Content */}
       <div className="p-4 pb-24">
-        {/* Page Title */}
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold">Barcode Scanner</h1>
-          <button
-            onClick={() => setManualMode(!manualMode)}
-            className="p-2 rounded-lg bg-gray-800"
-          >
-            {manualMode ? <Camera className="h-5 w-5" /> : <Search className="h-5 w-5" />}
-          </button>
+          <Link href="/mobile" className="p-2 rounded-lg bg-gray-800">
+            <X className="h-5 w-5" />
+          </Link>
         </div>
 
         {!product && !showCreateProduct && (
-          <>
-            {!manualMode ? (
-              /* Camera Scanner */
-              <div className="space-y-4">
-                {!isScanning ? (
-                  <button
-                    onClick={() => startCamera()}
-                    className="w-full py-4 rounded-lg font-semibold text-lg flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700"
-                  >
-                    <Camera className="h-6 w-6" />
-                    Kamera starten
-                  </button>
-                ) : (
-                  <div className="relative rounded-lg overflow-hidden bg-black">
-                    <video
-                      ref={videoRef}
-                      className="w-full aspect-[4/3] object-cover"
-                      autoPlay
-                      playsInline
-                      muted
-                    />
-                    
-                    {/* Scan frame overlay */}
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                      <div className="w-64 h-48 border-2 border-orange-500 rounded-lg">
-                        <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-orange-500" />
-                        <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-orange-500" />
-                        <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-orange-500" />
-                        <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-orange-500" />
-                      </div>
-                    </div>
-                    
-                    {/* Camera Controls */}
-                    <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4">
-                      <button
-                        onClick={switchCamera}
-                        className="p-3 bg-gray-800 bg-opacity-80 rounded-full"
-                        title="Kamera wechseln"
-                      >
-                        <SwitchCamera className="h-6 w-6" />
-                      </button>
-                      
-                      <button
-                        onClick={stopCamera}
-                        className="p-3 bg-red-600 rounded-full"
-                      >
-                        <CameraOff className="h-6 w-6" />
-                      </button>
-                      
-                      <button
-                        onClick={toggleTorch}
-                        className="p-3 bg-gray-800 bg-opacity-80 rounded-full"
-                        title="Taschenlampe"
-                      >
-                        <Flashlight className={`h-6 w-6 ${torchOn ? 'text-yellow-400' : ''}`} />
-                      </button>
-                    </div>
-
-                    {/* Current Camera Indicator */}
-                    <div className="absolute top-4 right-4 bg-black bg-opacity-50 px-3 py-1 rounded-full text-xs">
-                      {currentCamera === 'environment' ? 'Rückkamera' : 'Frontkamera'}
-                    </div>
-                  </div>
-                )}
-              </div>
+          <div className="space-y-4">
+            {!isScanning ? (
+              <button
+                onClick={startCamera}
+                className="w-full py-4 rounded-lg font-semibold text-lg flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700"
+              >
+                <Camera className="h-6 w-6" />
+                Scanner starten
+              </button>
             ) : (
-              /* Manual Input */
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    Barcode / SKU eingeben
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={scannedCode}
-                      onChange={(e) => setScannedCode(e.target.value)}
-                      placeholder="z.B. 123456789"
-                      className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-lg"
-                      autoFocus
-                    />
-                    <button
-                      onClick={handleManualSearch}
-                      disabled={loading || !scannedCode}
-                      className="px-4 py-3 bg-orange-600 rounded-lg disabled:bg-gray-700"
-                    >
-                      <Search className="h-6 w-6" />
-                    </button>
+              <div className="relative rounded-lg overflow-hidden bg-black">
+                <video
+                  ref={videoRef}
+                  className="w-full aspect-[4/3] object-cover"
+                  playsInline
+                  muted
+                  autoPlay
+                />
+                
+                {/* Scan frame overlay */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="w-64 h-48 border-2 border-orange-500 rounded-lg">
+                    <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-orange-500" />
+                    <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-orange-500" />
+                    <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-orange-500" />
+                    <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-orange-500" />
                   </div>
+                </div>
+                
+                {/* Camera Controls */}
+                <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4">
+                  <button
+                    onClick={switchCamera}
+                    className="p-3 bg-gray-800 bg-opacity-80 rounded-full"
+                  >
+                    <SwitchCamera className="h-6 w-6" />
+                  </button>
+                  
+                  <button
+                    onClick={stopCamera}
+                    className="p-3 bg-red-600 rounded-full"
+                  >
+                    <CameraOff className="h-6 w-6" />
+                  </button>
+                </div>
+
+                <div className="absolute top-4 right-4 bg-black bg-opacity-50 px-3 py-1 rounded-full text-xs">
+                  {currentCamera === 'environment' ? 'Rückkamera' : 'Frontkamera'}
                 </div>
               </div>
             )}
-          </>
+          </div>
         )}
 
         {/* Create New Product */}
@@ -435,7 +340,7 @@ export default function MobileScannerPage() {
             <div className="bg-gray-800 rounded-lg p-4">
               <h2 className="text-lg font-semibold mb-3">Neues Produkt anlegen</h2>
               <p className="text-sm text-gray-400 mb-4">
-                Barcode: <span className="font-mono">{scannedCode}</span>
+                Barcode: <span className="font-mono text-orange-500">{scannedCode}</span>
               </p>
               
               <div className="space-y-3">
@@ -447,7 +352,7 @@ export default function MobileScannerPage() {
                     type="text"
                     value={newProductName}
                     onChange={(e) => setNewProductName(e.target.value)}
-                    placeholder="z.B. Feuerwerk Batterie XL"
+                    placeholder="z.B. Feuerwerk Rakete XL"
                     className="w-full bg-gray-700 rounded-lg px-3 py-2"
                     autoFocus
                   />
@@ -477,13 +382,6 @@ export default function MobileScannerPage() {
                 </div>
               </div>
             </div>
-
-            <Link
-              href={`/mobile/barcode-learning?barcode=${scannedCode}`}
-              className="block text-center text-orange-500 underline"
-            >
-              Oder vorhandenes Produkt zuordnen →
-            </Link>
           </div>
         )}
 
@@ -522,7 +420,6 @@ export default function MobileScannerPage() {
             <div className="bg-gray-800 rounded-lg p-4">
               <h4 className="font-medium mb-3">Bestand anpassen</h4>
               
-              {/* Adjustment Type */}
               <div className="grid grid-cols-3 gap-2 mb-4">
                 <button
                   onClick={() => setAdjustmentType('add')}
@@ -556,7 +453,6 @@ export default function MobileScannerPage() {
                 </button>
               </div>
 
-              {/* Quantity Input */}
               <div className="flex items-center gap-4 mb-4">
                 <button
                   onClick={() => setQuantity(Math.max(1, quantity - 1))}
@@ -578,7 +474,6 @@ export default function MobileScannerPage() {
                 </button>
               </div>
 
-              {/* Preview */}
               <div className="p-3 bg-gray-700 rounded-lg mb-4 text-center">
                 <p className="text-sm text-gray-400">Neuer Bestand</p>
                 <p className="text-xl font-bold">
@@ -591,7 +486,6 @@ export default function MobileScannerPage() {
                 </p>
               </div>
 
-              {/* Action Buttons */}
               <div className="grid grid-cols-2 gap-3">
                 <button
                   onClick={resetScanner}
@@ -616,11 +510,10 @@ export default function MobileScannerPage() {
               </div>
             </div>
 
-            {/* Scan next button */}
             <button
               onClick={() => {
                 resetScanner();
-                if (!manualMode) startCamera();
+                startCamera();
               }}
               className="w-full py-3 bg-gray-700 rounded-lg font-medium"
             >
@@ -628,44 +521,10 @@ export default function MobileScannerPage() {
             </button>
           </div>
         )}
-
-        {/* Quick Actions */}
-        {!isScanning && !product && !showCreateProduct && (
-          <div className="mt-8 grid grid-cols-2 gap-4">
-            <Link
-              href="/mobile/inventory"
-              className="bg-gray-800 rounded-lg p-4 flex flex-col items-center gap-2"
-            >
-              <ClipboardList className="h-8 w-8 text-blue-500" />
-              <span className="text-sm">Inventur</span>
-            </Link>
-            <Link
-              href="/mobile/transfer"
-              className="bg-gray-800 rounded-lg p-4 flex flex-col items-center gap-2"
-            >
-              <Package className="h-8 w-8 text-green-500" />
-              <span className="text-sm">Umlagerung</span>
-            </Link>
-            <Link
-              href="/mobile/barcode-learning"
-              className="bg-gray-800 rounded-lg p-4 flex flex-col items-center gap-2"
-            >
-              <Database className="h-8 w-8 text-yellow-500" />
-              <span className="text-sm">Barcodes</span>
-            </Link>
-            <Link
-              href="/mobile/locations"
-              className="bg-gray-800 rounded-lg p-4 flex flex-col items-center gap-2"
-            >
-              <MapPin className="h-8 w-8 text-purple-500" />
-              <span className="text-sm">Lagerplätze</span>
-            </Link>
-          </div>
-        )}
       </div>
 
       {/* Bottom Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm z-40">
+      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm z-40 mobile-bottom-nav">
         <div className="grid grid-cols-4 py-2">
           <Link href="/mobile" className="flex flex-col items-center gap-1 py-2 text-gray-400">
             <Home className="h-6 w-6" />
@@ -679,9 +538,9 @@ export default function MobileScannerPage() {
             <ShoppingCart className="h-6 w-6" />
             <span className="text-xs">Picken</span>
           </Link>
-          <Link href="/mobile/locations" className="flex flex-col items-center gap-1 py-2 text-gray-400">
-            <MapPin className="h-6 w-6" />
-            <span className="text-xs">Plätze</span>
+          <Link href="/mobile/products" className="flex flex-col items-center gap-1 py-2 text-gray-400">
+            <Package className="h-6 w-6" />
+            <span className="text-xs">Produkte</span>
           </Link>
         </div>
       </div>
