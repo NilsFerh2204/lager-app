@@ -36,7 +36,7 @@ interface OrderItem {
   product_id: string;
   quantity: number;
   picked_quantity?: number;
-  products?: Product; // Note: might be 'products' not 'product' in the response
+  product?: Product;
 }
 
 interface Order {
@@ -71,23 +71,13 @@ export default function MobilePickingPage() {
 
       if (ordersError) throw ordersError;
 
-      // Then fetch order items with products for each order
+      // For each order, fetch items and products separately
       const ordersWithItems = await Promise.all(
         (ordersData || []).map(async (order) => {
+          // Get order items
           const { data: itemsData, error: itemsError } = await supabase
             .from('order_items')
-            .select(`
-              *,
-              products!product_id (
-                id,
-                name,
-                sku,
-                barcode,
-                storage_location,
-                current_stock,
-                image_url
-              )
-            `)
+            .select('*')
             .eq('order_id', order.id);
 
           if (itemsError) {
@@ -95,13 +85,35 @@ export default function MobilePickingPage() {
             return { ...order, order_items: [] };
           }
 
-          // Debug log to see the structure
-          console.log('Order items data:', itemsData);
+          // Get all unique product IDs
+          const productIds = [...new Set(itemsData?.map(item => item.product_id) || [])];
+          
+          // Fetch all products at once
+          const { data: productsData, error: productsError } = await supabase
+            .from('products')
+            .select('*')
+            .in('id', productIds);
 
-          return { ...order, order_items: itemsData || [] };
+          if (productsError) {
+            console.error('Error fetching products:', productsError);
+          }
+
+          // Create a map of products by ID
+          const productsMap = new Map(
+            (productsData || []).map(product => [product.id, product])
+          );
+
+          // Combine items with their products
+          const itemsWithProducts = (itemsData || []).map(item => ({
+            ...item,
+            product: productsMap.get(item.product_id) || null
+          }));
+
+          return { ...order, order_items: itemsWithProducts };
         })
       );
 
+      console.log('Orders with items:', ordersWithItems);
       setOrders(ordersWithItems);
     } catch (error) {
       console.error('Error fetching orders:', error);
@@ -114,11 +126,10 @@ export default function MobilePickingPage() {
   const handleBarcodeInput = async () => {
     if (!scannedBarcode.trim() || !selectedOrder || !selectedOrder.order_items) return;
 
-    // Find item with this barcode - check both 'product' and 'products' fields
-    const item = selectedOrder.order_items.find(item => {
-      const product = (item as any).product || (item as any).products;
-      return product && product.barcode === scannedBarcode;
-    });
+    // Find item with this barcode
+    const item = selectedOrder.order_items.find(
+      item => item.product && item.product.barcode === scannedBarcode
+    );
 
     if (!item) {
       toast.error('Produkt nicht in dieser Bestellung');
@@ -134,8 +145,7 @@ export default function MobilePickingPage() {
 
     // Mark as picked
     setPickedItems(prev => new Set([...prev, item.id]));
-    const product = (item as any).product || (item as any).products;
-    toast.success(`✓ ${product?.name || 'Produkt'} gepickt`);
+    toast.success(`✓ ${item.product?.name || 'Produkt'} gepickt`);
     setScannedBarcode('');
 
     // Check if all items are picked
@@ -182,6 +192,27 @@ export default function MobilePickingPage() {
     setScanMode(false);
     setPickedItems(new Set());
     setScannedBarcode('');
+  };
+
+  // Manual pick for items without barcodes
+  const toggleItemPicked = (itemId: string) => {
+    if (pickedItems.has(itemId)) {
+      setPickedItems(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(itemId);
+        return newSet;
+      });
+    } else {
+      setPickedItems(prev => new Set([...prev, itemId]));
+      
+      // Check if all items are picked
+      if (selectedOrder && selectedOrder.order_items && 
+          pickedItems.size + 1 === selectedOrder.order_items.length) {
+        setTimeout(() => {
+          completeOrder();
+        }, 1000);
+      }
+    }
   };
 
   if (loading) {
@@ -309,6 +340,9 @@ export default function MobilePickingPage() {
                       <Camera className="h-6 w-6" />
                     </button>
                   </div>
+                  <p className="text-xs text-gray-400 mt-2">
+                    Tipp: Klicken Sie auf Produkte ohne Barcode zum manuellen Abhaken
+                  </p>
                 </div>
 
                 {/* Product List */}
@@ -316,16 +350,15 @@ export default function MobilePickingPage() {
                   <h3 className="font-medium text-gray-400">Zu pickende Produkte:</h3>
                   {selectedOrder.order_items.map(item => {
                     const isPicked = pickedItems.has(item.id);
-                    // Try both 'product' and 'products' fields
-                    const product = (item as any).product || (item as any).products;
                     
                     return (
                       <div
                         key={item.id}
-                        className={`bg-gray-800 rounded-lg p-4 border ${
+                        onClick={() => toggleItemPicked(item.id)}
+                        className={`bg-gray-800 rounded-lg p-4 border cursor-pointer transition-all ${
                           isPicked 
-                            ? 'border-green-500 opacity-50' 
-                            : 'border-gray-700'
+                            ? 'border-green-500 opacity-70' 
+                            : 'border-gray-700 hover:border-gray-600'
                         }`}
                       >
                         <div className="flex items-start gap-3">
@@ -339,33 +372,41 @@ export default function MobilePickingPage() {
                           
                           <div className="flex-1">
                             <h4 className={`font-semibold ${isPicked ? 'line-through' : ''}`}>
-                              {product?.name || 'Unbekanntes Produkt'}
+                              {item.product?.name || `Produkt ID: ${item.product_id}`}
                             </h4>
-                            <p className="text-sm text-gray-400">
-                              SKU: {product?.sku || 'N/A'}
-                            </p>
-                            {product?.barcode && (
-                              <p className="text-xs text-gray-500">
-                                Barcode: {product.barcode}
+                            {item.product ? (
+                              <>
+                                <p className="text-sm text-gray-400">
+                                  SKU: {item.product.sku}
+                                </p>
+                                {item.product.barcode && (
+                                  <p className="text-xs text-gray-500">
+                                    Barcode: {item.product.barcode}
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <p className="text-sm text-red-400">
+                                Produktdaten nicht gefunden
                               </p>
                             )}
                             <div className="flex items-center gap-4 mt-2">
                               <span className="text-sm">
                                 Menge: <strong>{item.quantity}</strong>
                               </span>
-                              {product?.storage_location && (
+                              {item.product?.storage_location && (
                                 <div className="flex items-center gap-1 text-sm text-blue-400">
                                   <MapPin className="h-4 w-4" />
-                                  {product.storage_location}
+                                  {item.product.storage_location}
                                 </div>
                               )}
                             </div>
                           </div>
 
-                          {product?.image_url && (
+                          {item.product?.image_url && (
                             <img
-                              src={product.image_url}
-                              alt={product.name}
+                              src={item.product.image_url}
+                              alt={item.product.name}
                               className="w-16 h-16 rounded object-cover"
                             />
                           )}
