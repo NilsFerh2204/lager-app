@@ -10,7 +10,6 @@ import {
   QrCode,
   TrendingUp,
   AlertCircle,
-  CheckCircle,
   Clock,
   Users,
   Home,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { 
@@ -27,8 +27,35 @@ export default function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notificationCount] = useState(3);
+  const [isMobile, setIsMobile] = useState(false);
+  const [isClient, setIsClient] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
+
+  useEffect(() => {
+    setIsClient(true);
+    
+    // Check if mobile device
+    const checkMobile = () => {
+      const mobile = window.innerWidth < 768 || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      setIsMobile(mobile);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Don't render until client-side
+  if (!isClient) {
+    return null;
+  }
+
+  // Don't render navigation on mobile devices or mobile pages
+  if (isMobile || pathname.startsWith('/mobile')) {
+    return null;
+  }
 
   const isActive = (path: string) => pathname === path;
 
@@ -226,6 +253,7 @@ export default function Navigation() {
             <Link
               href="/dashboard"
               className="block px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              onClick={() => setMobileMenuOpen(false)}
             >
               <Home className="inline h-4 w-4 mr-2" />
               Dashboard
@@ -233,6 +261,7 @@ export default function Navigation() {
             <Link
               href="/products"
               className="block px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              onClick={() => setMobileMenuOpen(false)}
             >
               <Package className="inline h-4 w-4 mr-2" />
               Produkte
@@ -240,6 +269,7 @@ export default function Navigation() {
             <Link
               href="/orders"
               className="block px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              onClick={() => setMobileMenuOpen(false)}
             >
               <ShoppingCart className="inline h-4 w-4 mr-2" />
               Bestellungen
@@ -247,6 +277,7 @@ export default function Navigation() {
             <Link
               href="/storage-locations"
               className="block px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              onClick={() => setMobileMenuOpen(false)}
             >
               <Warehouse className="inline h-4 w-4 mr-2" />
               Lagerplätze
