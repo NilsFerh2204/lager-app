@@ -23,6 +23,13 @@ import {
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 
+// We'll load QuaggaJS dynamically
+declare global {
+  interface Window {
+    Quagga: any;
+  }
+}
+
 interface Product {
   id: string;
   name: string;
@@ -42,79 +49,155 @@ export default function MobileScannerPage() {
   const [showCreateProduct, setShowCreateProduct] = useState(false);
   const [newProductName, setNewProductName] = useState('');
   const [showCamera, setShowCamera] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
+  const [quaggaLoaded, setQuaggaLoaded] = useState(false);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const scannerRef = useRef<HTMLDivElement>(null);
+  const lastScannedRef = useRef<string>('');
 
   useEffect(() => {
+    // Load QuaggaJS dynamically
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js';
+    script.async = true;
+    script.onload = () => {
+      setQuaggaLoaded(true);
+      console.log('QuaggaJS loaded');
+    };
+    document.body.appendChild(script);
+
     return () => {
-      stopCamera();
+      document.body.removeChild(script);
+      if (window.Quagga && window.Quagga.stop) {
+        window.Quagga.stop();
+      }
     };
   }, []);
 
   const startCamera = async () => {
+    if (!quaggaLoaded || !window.Quagga) {
+      toast.error('Scanner wird noch geladen...');
+      return;
+    }
+
     try {
       setShowCamera(true);
-      setScanStatus('Kamera wird gestartet...');
+      setIsScanning(true);
+      setScanStatus('Scanner wird initialisiert...');
       
-      // Request camera permission
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
+      // Initialize Quagga
+      window.Quagga.init({
+        inputStream: {
+          name: "Live",
+          type: "LiveStream",
+          target: scannerRef.current,
+          constraints: {
+            width: { min: 640, ideal: 1280, max: 1920 },
+            height: { min: 480, ideal: 720, max: 1080 },
+            facingMode: "environment",
+            aspectRatio: { min: 1, max: 2 }
+          }
         },
-        audio: false 
-      });
-      
-      streamRef.current = stream;
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.setAttribute('webkit-playsinline', 'true');
-        videoRef.current.muted = true;
+        locator: {
+          patchSize: "medium",
+          halfSample: true
+        },
+        numOfWorkers: navigator.hardwareConcurrency || 4,
+        decoder: {
+          readers: [
+            "ean_reader",
+            "ean_8_reader",
+            "code_128_reader",
+            "code_39_reader",
+            "upc_reader",
+            "upc_e_reader"
+          ]
+        },
+        locate: true
+      }, (err: any) => {
+        if (err) {
+          console.error('Quagga initialization error:', err);
+          toast.error('Scanner konnte nicht gestartet werden');
+          setShowCamera(false);
+          setIsScanning(false);
+          return;
+        }
         
-        await videoRef.current.play();
-        setScanStatus('Barcode manuell eingeben und auf "Scannen" klicken');
-      }
+        console.log("Quagga initialization finished. Ready to start");
+        window.Quagga.start();
+        setScanStatus('Barcode in den Rahmen halten...');
+      });
+
+      // Set up detection handler
+      window.Quagga.onDetected((result: any) => {
+        if (result && result.codeResult && result.codeResult.code) {
+          const code = result.codeResult.code;
+          console.log('Barcode detected:', code);
+          
+          // Prevent duplicate scans
+          if (code !== lastScannedRef.current) {
+            lastScannedRef.current = code;
+            handleBarcodeDetected(code);
+          }
+        }
+      });
+
+      // Optional: Show processed frames for debugging
+      window.Quagga.onProcessed((result: any) => {
+        const drawingCtx = window.Quagga.canvas.ctx.overlay;
+        const drawingCanvas = window.Quagga.canvas.dom.overlay;
+
+        if (result) {
+          if (result.boxes) {
+            drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            result.boxes.filter((box: any) => box !== result.box).forEach((box: any) => {
+              window.Quagga.ImageDebug.drawPath(box, { x: 0, y: 1 }, drawingCtx, { color: "green", lineWidth: 2 });
+            });
+          }
+
+          if (result.box) {
+            window.Quagga.ImageDebug.drawPath(result.box, { x: 0, y: 1 }, drawingCtx, { color: "#00F", lineWidth: 2 });
+          }
+
+          if (result.codeResult && result.codeResult.code) {
+            window.Quagga.ImageDebug.drawPath(result.line, { x: 'x', y: 'y' }, drawingCtx, { color: 'red', lineWidth: 3 });
+          }
+        }
+      });
+
     } catch (error: any) {
       console.error('Camera error:', error);
       toast.error('Kamera-Fehler: ' + (error.message || 'Unbekannter Fehler'));
       setShowCamera(false);
+      setIsScanning(false);
     }
   };
 
   const stopCamera = () => {
-    // Stop video stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
+    if (window.Quagga && window.Quagga.stop) {
+      window.Quagga.stop();
     }
-
-    // Clear video
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-
     setShowCamera(false);
+    setIsScanning(false);
     setScanStatus('');
+    lastScannedRef.current = '';
   };
 
-  const handleManualScan = () => {
-    if (!manualBarcode.trim()) {
-      toast.error('Bitte Barcode eingeben');
-      return;
-    }
-
+  const handleBarcodeDetected = async (code: string) => {
     // Vibration feedback
     if (navigator.vibrate) {
-      navigator.vibrate([200]);
+      navigator.vibrate([200, 100, 200]);
     }
-
-    stopCamera();
-    checkProduct(manualBarcode);
+    
+    setScanStatus('✓ Barcode erfolgreich gescannt!');
+    
+    // Stop camera and process barcode
+    setTimeout(() => {
+      stopCamera();
+      setManualBarcode(code);
+      checkProduct(code);
+    }, 500);
   };
 
   const checkProduct = async (barcode?: string) => {
@@ -262,16 +345,12 @@ export default function MobileScannerPage() {
                   onChange={(e) => setManualBarcode(e.target.value)}
                   onKeyPress={(e) => {
                     if (e.key === 'Enter') {
-                      if (showCamera) {
-                        handleManualScan();
-                      } else {
-                        checkProduct();
-                      }
+                      checkProduct();
                     }
                   }}
                   placeholder="z.B. 4006680012342"
                   className="flex-1 bg-gray-700 rounded-lg px-4 py-3 text-lg"
-                  autoFocus
+                  autoFocus={!showCamera}
                 />
                 <button
                   onClick={() => checkProduct()}
@@ -282,82 +361,64 @@ export default function MobileScannerPage() {
                 </button>
                 <button
                   onClick={showCamera ? stopCamera : startCamera}
-                  className={`px-4 py-3 rounded-lg ${showCamera ? 'bg-red-600' : 'bg-orange-600'}`}
+                  disabled={!quaggaLoaded}
+                  className={`px-4 py-3 rounded-lg ${showCamera ? 'bg-red-600' : 'bg-orange-600'} ${!quaggaLoaded ? 'opacity-50' : ''}`}
                 >
                   {showCamera ? <CameraOff className="h-6 w-6" /> : <Camera className="h-6 w-6" />}
                 </button>
               </div>
               <p className="text-xs text-gray-400 mt-2">
-                Nutzen Sie die Kamera als Hilfe oder geben Sie den Code manuell ein
+                Nutzen Sie die Kamera oder geben Sie den Code manuell ein
               </p>
             </div>
 
             {/* Camera View */}
             {showCamera && (
               <div className="relative bg-black rounded-lg overflow-hidden">
-                <video
-                  ref={videoRef}
-                  className="w-full aspect-video object-cover"
-                  style={{ maxHeight: '400px' }}
-                  playsInline
-                  muted
-                  autoPlay
-                />
-                
-                {/* Scan Frame */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="relative">
-                    <div className="w-64 h-32 border-2 border-orange-500 rounded-lg">
-                      <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-orange-500" />
-                      <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-orange-500" />
-                      <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-orange-500" />
-                      <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-orange-500" />
-                    </div>
+                <div 
+                  ref={scannerRef}
+                  id="scanner-container"
+                  className="relative w-full"
+                  style={{ height: '400px' }}
+                >
+                  {/* QuaggaJS will inject video and canvas here */}
+                </div>
+
+                {/* Status Bar */}
+                <div className="absolute bottom-4 left-4 right-4 bg-black bg-opacity-75 rounded-lg p-2 text-center">
+                  <div className="flex items-center justify-center gap-2 text-sm">
+                    <Scan className="h-4 w-4 animate-pulse" />
+                    {scanStatus}
                   </div>
                 </div>
 
-                {/* Manual Scan Button */}
-                <div className="absolute bottom-4 left-4 right-4 space-y-2">
-                  <div className="bg-black bg-opacity-75 rounded-lg p-2 text-center">
-                    <p className="text-sm">{scanStatus}</p>
-                  </div>
-                  
-                  {manualBarcode && (
-                    <button
-                      onClick={handleManualScan}
-                      className="w-full bg-orange-600 rounded-lg py-3 font-semibold flex items-center justify-center gap-2"
-                    >
-                      <Scan className="h-5 w-5" />
-                      Barcode scannen: {manualBarcode}
-                    </button>
-                  )}
-                </div>
+                {/* Close Button */}
+                <button
+                  onClick={stopCamera}
+                  className="absolute top-4 right-4 p-2 bg-red-600 rounded-full hover:bg-red-700 z-10"
+                >
+                  <CameraOff className="h-5 w-5" />
+                </button>
               </div>
             )}
 
-            {/* Alternative Scanner Info */}
-            <div className="bg-yellow-900 bg-opacity-30 rounded-lg p-4">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="h-5 w-5 text-yellow-500 flex-shrink-0 mt-0.5" />
-                <div className="text-sm">
-                  <p className="font-semibold text-yellow-500">Hinweis zum Scanner:</p>
-                  <p className="text-gray-300 mt-1">
-                    Die automatische Barcode-Erkennung funktioniert auf einigen Geräten nicht zuverlässig. 
-                    Nutzen Sie die Kamera als visuelle Hilfe und tippen Sie den Barcode manuell ein.
-                  </p>
-                  <p className="text-gray-400 mt-2">
-                    Tipp: Verwenden Sie einen externen Bluetooth-Scanner für beste Ergebnisse.
-                  </p>
-                </div>
-              </div>
+            {/* Scanner Info */}
+            <div className="bg-blue-900 bg-opacity-30 rounded-lg p-4">
+              <h3 className="font-semibold mb-2">Scanner-Tipps:</h3>
+              <ul className="text-sm space-y-1 text-gray-300">
+                <li>• Halten Sie den Barcode ruhig und gut beleuchtet</li>
+                <li>• Der Barcode sollte das Bild ausfüllen</li>
+                <li>• Unterstützt: EAN-13, EAN-8, Code 128, Code 39, UPC</li>
+                <li>• Bei Problemen: Barcode manuell eingeben</li>
+              </ul>
             </div>
 
             {/* Quick Instructions */}
             {!showCamera && (
-              <div className="bg-blue-900 bg-opacity-30 rounded-lg p-4">
+              <div className="bg-green-900 bg-opacity-30 rounded-lg p-4">
                 <h3 className="font-semibold mb-2">So funktioniert's:</h3>
                 <ol className="text-sm space-y-1 text-gray-300">
-                  <li>1. Barcode manuell eingeben oder Kamera als Hilfe nutzen</li>
+                  <li>1. Kamera-Button drücken für automatisches Scannen</li>
                   <li>2. Produkt wird automatisch gefunden oder neu angelegt</li>
                   <li>3. Bestand anpassen und speichern</li>
                 </ol>
@@ -555,6 +616,33 @@ export default function MobileScannerPage() {
           </div>
         )}
       </div>
+
+      {/* Add QuaggaJS styles */}
+      <style jsx global>{`
+        #scanner-container {
+          position: relative;
+          width: 100%;
+          height: 400px;
+        }
+        
+        #scanner-container video {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        
+        #scanner-container canvas {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+        }
+        
+        #scanner-container canvas.drawing {
+          z-index: 1;
+        }
+      `}</style>
 
       {/* Bottom Navigation */}
       <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm z-40 mobile-bottom-nav">
