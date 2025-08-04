@@ -16,8 +16,11 @@ import {
   Loader2,
   ShoppingCart,
   Filter,
-  X
+  X,
+  Home,
+  ChevronLeft
 } from 'lucide-react';
+import Link from 'next/link';
 import toast from 'react-hot-toast';
 
 interface Order {
@@ -57,6 +60,7 @@ interface OrderItem {
 
 interface PickingSession {
   orders: Order[];
+  currentOrderIndex: number;
   pickedItems: Set<string>;
   startTime: Date;
 }
@@ -88,7 +92,7 @@ export default function MobilePickingPage() {
             )
           )
         `)
-        .order('shopify_created_at', { ascending: false });
+        .order('shopify_created_at', { ascending: true });
 
       if (error) throw error;
       setOrders(data || []);
@@ -109,6 +113,7 @@ export default function MobilePickingPage() {
     const selectedOrdersList = orders.filter(o => selectedOrders.has(o.id));
     setActiveSession({
       orders: selectedOrdersList,
+      currentOrderIndex: 0,
       pickedItems: new Set(),
       startTime: new Date()
     });
@@ -134,38 +139,74 @@ export default function MobilePickingPage() {
     });
   };
 
-  const completePicking = async () => {
+  const nextOrder = () => {
     if (!activeSession) return;
 
-    const allItems = activeSession.orders.flatMap(o => o.order_items);
-    const allPicked = allItems.every(item => activeSession.pickedItems.has(item.id));
+    if (activeSession.currentOrderIndex < activeSession.orders.length - 1) {
+      setActiveSession({
+        ...activeSession,
+        currentOrderIndex: activeSession.currentOrderIndex + 1
+      });
+    } else {
+      // All orders completed
+      completePicking();
+    }
+  };
 
-    if (!allPicked) {
-      if (!confirm('Nicht alle Artikel wurden gepickt. Trotzdem abschließen?')) {
+  const previousOrder = () => {
+    if (!activeSession || activeSession.currentOrderIndex === 0) return;
+
+    setActiveSession({
+      ...activeSession,
+      currentOrderIndex: activeSession.currentOrderIndex - 1
+    });
+  };
+
+  const completeCurrentOrder = async () => {
+    if (!activeSession) return;
+
+    const currentOrder = activeSession.orders[activeSession.currentOrderIndex];
+    const orderItems = currentOrder.order_items;
+    const pickedOrderItems = orderItems.filter(item => activeSession.pickedItems.has(item.id));
+
+    if (pickedOrderItems.length !== orderItems.length) {
+      if (!confirm(`Nur ${pickedOrderItems.length} von ${orderItems.length} Artikeln gepickt. Trotzdem fortfahren?`)) {
         return;
       }
     }
 
     try {
       // Update order status
-      for (const order of activeSession.orders) {
-        await supabase
-          .from('orders')
-          .update({ 
-            fulfillment_status: 'fulfilled',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', order.id);
-      }
+      await supabase
+        .from('orders')
+        .update({ 
+          fulfillment_status: 'fulfilled',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', currentOrder.id);
 
-      toast.success('Kommissionierung abgeschlossen!');
-      setActiveSession(null);
-      setSelectedOrders(new Set());
-      fetchOrders();
+      toast.success(`Bestellung #${currentOrder.order_number} abgeschlossen`);
+      
+      // Move to next order or complete session
+      if (activeSession.currentOrderIndex < activeSession.orders.length - 1) {
+        nextOrder();
+      } else {
+        completePicking();
+      }
     } catch (error) {
-      console.error('Error completing picking:', error);
-      toast.error('Fehler beim Abschließen');
+      toast.error('Fehler beim Abschließen der Bestellung');
     }
+  };
+
+  const completePicking = async () => {
+    if (!activeSession) return;
+
+    const duration = Math.round((Date.now() - activeSession.startTime.getTime()) / 1000 / 60);
+    toast.success(`Kommissionierung abgeschlossen! ${activeSession.orders.length} Bestellungen in ${duration} Minuten`);
+    
+    setActiveSession(null);
+    setSelectedOrders(new Set());
+    fetchOrders();
   };
 
   const filteredOrders = orders.filter(order => {
@@ -174,24 +215,19 @@ export default function MobilePickingPage() {
     return true;
   });
 
-  const groupedItemsByLocation = () => {
-    if (!activeSession) return {};
+  const currentOrder = activeSession ? activeSession.orders[activeSession.currentOrderIndex] : null;
+  const currentOrderItems = currentOrder ? currentOrder.order_items : [];
+  const groupedItemsByLocation = currentOrderItems.reduce((acc, item) => {
+    const location = item.product?.storage_location || 'Kein Lagerplatz';
+    if (!acc[location]) acc[location] = [];
+    acc[location].push(item);
+    return acc;
+  }, {} as Record<string, OrderItem[]>);
 
-    const items = activeSession.orders.flatMap(o => 
-      o.order_items.map(item => ({
-        ...item,
-        orderNumber: o.order_number,
-        customerName: o.customer_name
-      }))
-    );
-
-    return items.reduce((acc, item) => {
-      const location = item.product?.storage_location || 'Kein Lagerplatz';
-      if (!acc[location]) acc[location] = [];
-      acc[location].push(item);
-      return acc;
-    }, {} as Record<string, any[]>);
-  };
+  const currentOrderProgress = currentOrder ? {
+    picked: currentOrderItems.filter(item => activeSession?.pickedItems.has(item.id)).length,
+    total: currentOrderItems.length
+  } : { picked: 0, total: 0 };
 
   if (loading) {
     return (
@@ -202,7 +238,7 @@ export default function MobilePickingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
+    <div className="min-h-screen bg-gray-900 text-white pb-20">
       {/* Header */}
       <div className="fixed top-0 left-0 right-0 bg-black bg-opacity-80 backdrop-blur-sm z-50">
         <div className="flex items-center justify-between p-4">
@@ -213,7 +249,10 @@ export default function MobilePickingPage() {
             <ArrowLeft className="h-6 w-6" />
           </button>
           <h1 className="text-lg font-semibold">
-            {activeSession ? 'Pickliste' : 'Kommissionierung'}
+            {activeSession 
+              ? `Bestellung ${activeSession.currentOrderIndex + 1}/${activeSession.orders.length}`
+              : 'Kommissionierung'
+            }
           </h1>
           {!activeSession && (
             <button
@@ -225,14 +264,14 @@ export default function MobilePickingPage() {
           )}
           {activeSession && (
             <div className="text-sm">
-              {activeSession.pickedItems.size} / {activeSession.orders.flatMap(o => o.order_items).length}
+              {currentOrderProgress.picked}/{currentOrderProgress.total}
             </div>
           )}
         </div>
       </div>
 
       {/* Main Content */}
-      <div className="pt-20 pb-24">
+      <div className="pt-20">
         {!activeSession ? (
           <>
             {/* Filters */}
@@ -332,26 +371,40 @@ export default function MobilePickingPage() {
             </div>
           </>
         ) : (
-          /* Active Picking Session */
+          /* Active Picking Session - Current Order */
           <div className="p-4">
-            {/* Progress Bar */}
-            <div className="mb-6">
-              <div className="flex justify-between text-sm mb-2">
-                <span>Fortschritt</span>
-                <span>{Math.round((activeSession.pickedItems.size / activeSession.orders.flatMap(o => o.order_items).length) * 100)}%</span>
+            {/* Order Header */}
+            <div className="bg-blue-900 bg-opacity-50 rounded-lg p-4 mb-4">
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <h2 className="text-xl font-bold">#{currentOrder?.order_number}</h2>
+                  <p className="text-gray-300">{currentOrder?.customer_name}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-gray-400">Bestellung</p>
+                  <p className="font-bold">{activeSession.currentOrderIndex + 1} / {activeSession.orders.length}</p>
+                </div>
               </div>
-              <div className="bg-gray-700 rounded-full h-3">
-                <div 
-                  className="bg-orange-600 h-3 rounded-full transition-all"
-                  style={{ 
-                    width: `${(activeSession.pickedItems.size / activeSession.orders.flatMap(o => o.order_items).length) * 100}%` 
-                  }}
-                />
+              
+              {/* Progress Bar */}
+              <div className="mt-3">
+                <div className="flex justify-between text-sm mb-1">
+                  <span>Fortschritt</span>
+                  <span>{Math.round((currentOrderProgress.picked / currentOrderProgress.total) * 100)}%</span>
+                </div>
+                <div className="bg-gray-700 rounded-full h-3">
+                  <div 
+                    className="bg-orange-600 h-3 rounded-full transition-all"
+                    style={{ 
+                      width: `${(currentOrderProgress.picked / currentOrderProgress.total) * 100}%` 
+                    }}
+                  />
+                </div>
               </div>
             </div>
 
             {/* Items grouped by location */}
-            {Object.entries(groupedItemsByLocation()).map(([location, items]) => (
+            {Object.entries(groupedItemsByLocation).map(([location, items]) => (
               <div key={location} className="mb-6">
                 <div className="flex items-center gap-2 mb-3">
                   <MapPin className="h-5 w-5 text-blue-500" />
@@ -359,7 +412,7 @@ export default function MobilePickingPage() {
                 </div>
 
                 <div className="space-y-2">
-                  {items.map((item: any) => (
+                  {items.map((item) => (
                     <div
                       key={item.id}
                       className={`bg-gray-800 rounded-lg p-4 ${
@@ -389,7 +442,7 @@ export default function MobilePickingPage() {
                             {item.title}
                           </p>
                           <p className="text-sm text-gray-400">
-                            {item.sku} • Bestellung #{item.orderNumber}
+                            {item.sku}
                           </p>
                           {item.variant_title && (
                             <p className="text-sm text-gray-500">{item.variant_title}</p>
@@ -409,34 +462,67 @@ export default function MobilePickingPage() {
                 </div>
               </div>
             ))}
+
+            {/* Navigation Buttons */}
+            <div className="grid grid-cols-2 gap-3 mt-6">
+              <button
+                onClick={previousOrder}
+                disabled={activeSession.currentOrderIndex === 0}
+                className="py-3 bg-gray-700 rounded-lg font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <ChevronLeft className="h-5 w-5" />
+                Zurück
+              </button>
+              <button
+                onClick={completeCurrentOrder}
+                className={`py-3 rounded-lg font-semibold flex items-center justify-center gap-2 ${
+                  currentOrderProgress.picked === currentOrderProgress.total
+                    ? 'bg-green-600'
+                    : 'bg-orange-600'
+                }`}
+              >
+                {activeSession.currentOrderIndex < activeSession.orders.length - 1 ? 'Nächste' : 'Fertig'}
+                <ChevronRight className="h-5 w-5" />
+              </button>
+            </div>
           </div>
         )}
       </div>
 
       {/* Bottom Actions */}
       {!activeSession && selectedOrders.size > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm p-4">
+        <div className="fixed bottom-20 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm p-4">
           <button
             onClick={startPicking}
             className="w-full bg-orange-600 hover:bg-orange-700 text-white py-4 rounded-lg font-semibold text-lg flex items-center justify-center gap-2"
           >
             <Package className="h-6 w-6" />
-            Pickliste erstellen ({selectedOrders.size})
+            Kommissionierung starten ({selectedOrders.size})
           </button>
         </div>
       )}
 
-      {activeSession && (
-        <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm p-4">
-          <button
-            onClick={completePicking}
-            className="w-full bg-green-600 hover:bg-green-700 text-white py-4 rounded-lg font-semibold text-lg flex items-center justify-center gap-2"
-          >
-            <CheckCircle className="h-6 w-6" />
-            Picking abschließen
-          </button>
+      {/* Bottom Navigation */}
+      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm">
+        <div className="grid grid-cols-4 py-2">
+          <Link href="/mobile" className="flex flex-col items-center gap-1 py-2 text-gray-400">
+            <Home className="h-6 w-6" />
+            <span className="text-xs">Home</span>
+          </Link>
+          <Link href="/mobile/scan" className="flex flex-col items-center gap-1 py-2 text-gray-400">
+            <QrCode className="h-6 w-6" />
+            <span className="text-xs">Scan</span>
+          </Link>
+          <Link href="/mobile/picking" className="flex flex-col items-center gap-1 py-2 text-orange-500">
+            <ShoppingCart className="h-6 w-6" />
+            <span className="text-xs">Picken</span>
+          </Link>
+          <Link href="/mobile/locations" className="flex flex-col items-center gap-1 py-2 text-gray-400">
+            <MapPin className="h-6 w-6" />
+            <span className="text-xs">Plätze</span>
+          </Link>
         </div>
-      )}
+      </div>
     </div>
   );
 }
