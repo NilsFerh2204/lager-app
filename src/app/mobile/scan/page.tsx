@@ -10,13 +10,13 @@ import {
   Minus,
   MapPin,
   ArrowLeft,
-  FlashOff,
   Flashlight,
   SwitchCamera,
   Search,
   Check,
   AlertCircle,
-  Loader2
+  Loader2,
+  ClipboardList
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { BrowserMultiFormatReader, BarcodeFormat } from '@zxing/library';
@@ -239,7 +239,7 @@ export default function MobileScannerPage() {
                 onClick={toggleFlash}
                 className="p-3 bg-gray-800 rounded-full"
               >
-                {flashOn ? <Flashlight className="h-6 w-6" /> : <FlashOff className="h-6 w-6" />}
+                <Flashlight className={`h-6 w-6 ${flashOn ? 'text-yellow-400' : 'text-gray-400'}`} />
               </button>
               <button
                 onClick={stopScanning}
