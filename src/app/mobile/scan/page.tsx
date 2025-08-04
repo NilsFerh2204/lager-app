@@ -20,7 +20,8 @@ import {
   ShoppingCart,
   ClipboardList,
   QrCode,
-  Smartphone
+  Smartphone,
+  Database
 } from 'lucide-react';
 import Link from 'next/link';
 import { BrowserMultiFormatReader, IScannerControls } from '@zxing/library';
@@ -108,56 +109,84 @@ export default function MobileScannerPage() {
         readerRef.current = new BrowserMultiFormatReader();
       }
 
-      const devices = await readerRef.current.listVideoInputDevices();
-      if (devices.length === 0) {
-        throw new Error('Keine Kamera gefunden');
-      }
+      // Explizit Rückkamera anfordern
+      const constraints = {
+        video: {
+          facingMode: { exact: "environment" }, // Rückkamera erzwingen
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      };
 
-      // Prefer back camera
-      const backCamera = devices.find(device => 
-        device.label.toLowerCase().includes('back') || 
-        device.label.toLowerCase().includes('rear') ||
-        device.label.toLowerCase().includes('environment')
-      );
+      // Direkt Stream anfordern
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
-      const selectedDevice = backCamera || devices[0];
-
-      scannerRef.current = await readerRef.current.decodeFromVideoDevice(
-        selectedDevice.deviceId,
-        videoRef.current!,
-        (result, error) => {
-          if (result) {
-            const code = result.getText();
-            handleScan(code);
-            
-            // Vibration feedback
-            if (navigator.vibrate) {
-              navigator.vibrate(200);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        
+        // Scanner auf diesem Stream starten
+        scannerRef.current = await readerRef.current.decodeFromVideoElement(
+          videoRef.current,
+          (result, error) => {
+            if (result) {
+              const code = result.getText();
+              handleScan(code);
+              
+              if (navigator.vibrate) {
+                navigator.vibrate(200);
+              }
             }
           }
-        }
-      );
+        );
 
-      // Apply torch if supported
-      if (flashOn && videoRef.current?.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        const track = stream.getVideoTracks()[0];
-        if (track.getCapabilities && 'torch' in track.getCapabilities()) {
-          await track.applyConstraints({
-            // @ts-ignore
-            advanced: [{ torch: flashOn }]
-          });
+        // Apply torch if supported
+        if (flashOn) {
+          const track = stream.getVideoTracks()[0];
+          if (track.getCapabilities && 'torch' in track.getCapabilities()) {
+            await track.applyConstraints({
+              // @ts-ignore
+              advanced: [{ torch: flashOn }]
+            });
+          }
         }
       }
     } catch (error: any) {
-      console.error('Scanner error:', error);
-      setScanning(false);
+      console.error('Exact environment camera error:', error);
       
-      if (error.name === 'NotAllowedError') {
-        setHasPermission(false);
-        toast.error('Kamera-Zugriff verweigert. Bitte erlauben Sie den Zugriff.');
-      } else {
-        toast.error('Fehler beim Starten der Kamera');
+      // Falls exact environment nicht funktioniert, normale Rückkamera
+      try {
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" }
+        });
+        
+        if (videoRef.current) {
+          videoRef.current.srcObject = fallbackStream;
+          
+          // Scanner mit Fallback starten
+          scannerRef.current = await readerRef.current!.decodeFromVideoElement(
+            videoRef.current,
+            (result, error) => {
+              if (result) {
+                const code = result.getText();
+                handleScan(code);
+                
+                if (navigator.vibrate) {
+                  navigator.vibrate(200);
+                }
+              }
+            }
+          );
+        }
+      } catch (fallbackError: any) {
+        console.error('Kamera-Fehler:', fallbackError);
+        setScanning(false);
+        
+        if (fallbackError.name === 'NotAllowedError') {
+          setHasPermission(false);
+          toast.error('Kamera-Zugriff verweigert. Bitte erlauben Sie den Zugriff.');
+        } else {
+          toast.error('Kamera konnte nicht gestartet werden');
+        }
       }
     }
   };
@@ -167,6 +196,14 @@ export default function MobileScannerPage() {
       scannerRef.current.stop();
       scannerRef.current = null;
     }
+    
+    // Stop video stream
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
+    
     setScanning(false);
   };
 
@@ -179,6 +216,7 @@ export default function MobileScannerPage() {
   const searchProduct = async (searchTerm: string) => {
     setLoading(true);
     try {
+      // Erst nach Produkt mit Barcode suchen
       const { data, error } = await supabase
         .from('products')
         .select('*')
@@ -186,7 +224,31 @@ export default function MobileScannerPage() {
         .single();
 
       if (error || !data) {
-        toast.error('Produkt nicht gefunden');
+        // Produkt nicht gefunden - als unbekannten Barcode speichern
+        const { error: insertError } = await supabase
+          .from('unknown_barcodes')
+          .upsert({
+            barcode: searchTerm,
+            scan_count: 1,
+            last_scanned: new Date().toISOString()
+          }, {
+            onConflict: 'barcode'
+          });
+
+        // Scan count erhöhen wenn bereits existiert
+        if (insertError?.code === '23505') { // Duplicate key
+          await supabase.rpc('increment_scan_count', { 
+            barcode_param: searchTerm 
+          });
+        }
+
+        toast.error('Unbekannter Barcode! Bitte zuordnen.');
+        
+        // Option zum Zuordnen anbieten
+        if (confirm('Möchten Sie diesen Barcode jetzt einem Produkt zuordnen?')) {
+          window.location.href = `/mobile/barcode-learning?barcode=${searchTerm}`;
+        }
+        
         setProduct(null);
       } else {
         setProduct(data);
@@ -237,6 +299,18 @@ export default function MobileScannerPage() {
 
       if (error) throw error;
 
+      // Log inventory adjustment
+      await supabase
+        .from('inventory_adjustments')
+        .insert({
+          product_id: product.id,
+          old_quantity: product.current_stock,
+          new_quantity: newStock,
+          difference: newStock - product.current_stock,
+          reason: adjustmentType === 'add' ? 'Wareneingang' : adjustmentType === 'remove' ? 'Entnahme' : 'Inventur',
+          adjusted_by: 'Mobile Scanner'
+        });
+
       toast.success(`Bestand aktualisiert: ${newStock} Stück`);
       setProduct({ ...product, current_stock: newStock });
       
@@ -264,15 +338,28 @@ export default function MobileScannerPage() {
       
       if (track.getCapabilities && 'torch' in track.getCapabilities()) {
         const newFlashState = !flashOn;
-        await track.applyConstraints({
-          // @ts-ignore
-          advanced: [{ torch: newFlashState }]
-        });
-        setFlashOn(newFlashState);
+        try {
+          await track.applyConstraints({
+            // @ts-ignore
+            advanced: [{ torch: newFlashState }]
+          });
+          setFlashOn(newFlashState);
+        } catch (error) {
+          console.error('Flash toggle error:', error);
+          toast.error('Taschenlampe nicht verfügbar');
+        }
       } else {
         toast.error('Taschenlampe nicht verfügbar');
       }
     }
+  };
+
+  const switchCamera = async () => {
+    stopScanning();
+    setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
+    setTimeout(() => {
+      startScanning();
+    }, 100);
   };
 
   return (
@@ -359,8 +446,10 @@ export default function MobileScannerPage() {
                 <video
                   ref={videoRef}
                   className="w-full aspect-[4/3] object-cover"
+                  autoPlay
+                  playsInline
                 />
-                <div className="absolute inset-0 border-2 border-orange-500 m-8 rounded-lg" />
+                <div className="absolute inset-0 border-2 border-orange-500 m-8 rounded-lg pointer-events-none" />
                 
                 {/* Scanner Controls */}
                 <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4">
@@ -375,6 +464,12 @@ export default function MobileScannerPage() {
                     className="p-3 bg-red-600 rounded-full"
                   >
                     <X className="h-6 w-6" />
+                  </button>
+                  <button
+                    onClick={switchCamera}
+                    className="p-3 bg-gray-800 bg-opacity-80 rounded-full"
+                  >
+                    <SwitchCamera className="h-6 w-6 text-gray-400" />
                   </button>
                 </div>
               </div>
@@ -556,6 +651,20 @@ export default function MobileScannerPage() {
             >
               <Package className="h-8 w-8 text-green-500" />
               <span className="text-sm">Umlagerung</span>
+            </Link>
+            <Link
+              href="/mobile/barcode-learning"
+              className="bg-gray-800 rounded-lg p-4 flex flex-col items-center gap-2"
+            >
+              <Database className="h-8 w-8 text-yellow-500" />
+              <span className="text-sm">Barcodes</span>
+            </Link>
+            <Link
+              href="/mobile/locations"
+              className="bg-gray-800 rounded-lg p-4 flex flex-col items-center gap-2"
+            >
+              <MapPin className="h-8 w-8 text-purple-500" />
+              <span className="text-sm">Lagerplätze</span>
             </Link>
           </div>
         )}
