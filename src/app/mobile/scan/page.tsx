@@ -16,139 +16,217 @@ import {
   Check,
   AlertCircle,
   Loader2,
-  ClipboardList
+  Home,
+  ShoppingCart,
+  ClipboardList,
+  QrCode,
+  Smartphone
 } from 'lucide-react';
+import Link from 'next/link';
+import { BrowserMultiFormatReader, IScannerControls } from '@zxing/library';
 import toast from 'react-hot-toast';
-import { BrowserMultiFormatReader, BarcodeFormat } from '@zxing/library';
 
 interface Product {
   id: string;
   name: string;
   sku: string;
-  barcode: string | null;
   current_stock: number;
-  minimum_stock: number;
   storage_location: string | null;
   image_url: string | null;
-  price: number | null;
 }
 
 export default function MobileScannerPage() {
   const [scanning, setScanning] = useState(false);
+  const [scannedCode, setScannedCode] = useState('');
   const [product, setProduct] = useState<Product | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [quantity, setQuantity] = useState(1);
+  const [adjustmentType, setAdjustmentType] = useState<'add' | 'remove' | 'set'>('add');
   const [flashOn, setFlashOn] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
-  const [manualCode, setManualCode] = useState('');
-  const [adjustQuantity, setAdjustQuantity] = useState(0);
-  const [showAdjustModal, setShowAdjustModal] = useState(false);
-  
+  const [loading, setLoading] = useState(false);
+  const [manualMode, setManualMode] = useState(false);
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [isIOS, setIsIOS] = useState(false);
+  const [showInstructions, setShowInstructions] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement>(null);
-  const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const scannerRef = useRef<IScannerControls | null>(null);
+  const readerRef = useRef<BrowserMultiFormatReader | null>(null);
 
   useEffect(() => {
-    // Initialize barcode reader
-    codeReaderRef.current = new BrowserMultiFormatReader();
+    // Detect iOS
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    setIsIOS(iOS);
     
-    // Add PWA install prompt
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js');
-    }
-
-    return () => {
-      stopScanning();
-    };
+    // Check if camera permissions are already granted
+    checkCameraPermission();
   }, []);
 
-  const startScanning = async () => {
+  const checkCameraPermission = async () => {
     try {
-      setScanning(true);
-      const codeReader = codeReaderRef.current;
-      if (!codeReader || !videoRef.current) return;
+      const result = await navigator.permissions.query({ name: 'camera' as PermissionName });
+      setHasPermission(result.state === 'granted');
+      
+      if (result.state === 'prompt') {
+        setShowInstructions(true);
+      }
+    } catch (error) {
+      // iOS doesn't support permissions API, we'll try to request camera access
+      console.log('Permissions API not supported');
+    }
+  };
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode,
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        }
+  const requestCameraPermission = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'environment' } 
       });
       
-      streamRef.current = stream;
-      videoRef.current.srcObject = stream;
+      // Permission granted, stop the stream
+      stream.getTracks().forEach(track => track.stop());
+      setHasPermission(true);
+      setShowInstructions(false);
+      return true;
+    } catch (error) {
+      console.error('Camera permission denied:', error);
+      setHasPermission(false);
+      toast.error('Kamera-Zugriff verweigert. Bitte erlauben Sie den Zugriff in den Einstellungen.');
+      return false;
+    }
+  };
 
-      codeReader.decodeFromVideoDevice(
-        null,
-        videoRef.current,
-        async (result, error) => {
+  const startScanning = async () => {
+    // First check/request permission
+    if (hasPermission === false || hasPermission === null) {
+      const granted = await requestCameraPermission();
+      if (!granted) return;
+    }
+
+    try {
+      setScanning(true);
+      if (!readerRef.current) {
+        readerRef.current = new BrowserMultiFormatReader();
+      }
+
+      const devices = await readerRef.current.listVideoInputDevices();
+      if (devices.length === 0) {
+        throw new Error('Keine Kamera gefunden');
+      }
+
+      // Prefer back camera
+      const backCamera = devices.find(device => 
+        device.label.toLowerCase().includes('back') || 
+        device.label.toLowerCase().includes('rear') ||
+        device.label.toLowerCase().includes('environment')
+      );
+      
+      const selectedDevice = backCamera || devices[0];
+
+      scannerRef.current = await readerRef.current.decodeFromVideoDevice(
+        selectedDevice.deviceId,
+        videoRef.current!,
+        (result, error) => {
           if (result) {
             const code = result.getText();
-            await handleBarcodeScan(code);
-            stopScanning();
+            handleScan(code);
+            
+            // Vibration feedback
+            if (navigator.vibrate) {
+              navigator.vibrate(200);
+            }
           }
         }
       );
-    } catch (error) {
-      console.error('Error starting scanner:', error);
-      toast.error('Kamera-Zugriff verweigert');
+
+      // Apply torch if supported
+      if (flashOn && videoRef.current?.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        const track = stream.getVideoTracks()[0];
+        if (track.getCapabilities && 'torch' in track.getCapabilities()) {
+          await track.applyConstraints({
+            // @ts-ignore
+            advanced: [{ torch: flashOn }]
+          });
+        }
+      }
+    } catch (error: any) {
+      console.error('Scanner error:', error);
       setScanning(false);
+      
+      if (error.name === 'NotAllowedError') {
+        setHasPermission(false);
+        toast.error('Kamera-Zugriff verweigert. Bitte erlauben Sie den Zugriff.');
+      } else {
+        toast.error('Fehler beim Starten der Kamera');
+      }
     }
   };
 
   const stopScanning = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
-    if (codeReaderRef.current) {
-      codeReaderRef.current.reset();
+    if (scannerRef.current) {
+      scannerRef.current.stop();
+      scannerRef.current = null;
     }
     setScanning(false);
   };
 
-  const handleBarcodeScan = async (code: string) => {
-    setLoading(true);
-    
-    // Vibration feedback
-    if (navigator.vibrate) {
-      navigator.vibrate(200);
-    }
+  const handleScan = async (code: string) => {
+    setScannedCode(code);
+    stopScanning();
+    await searchProduct(code);
+  };
 
+  const searchProduct = async (searchTerm: string) => {
+    setLoading(true);
     try {
-      // Search by barcode or SKU
       const { data, error } = await supabase
         .from('products')
         .select('*')
-        .or(`barcode.eq.${code},sku.eq.${code}`)
+        .or(`sku.eq.${searchTerm},barcode.eq.${searchTerm}`)
         .single();
 
       if (error || !data) {
         toast.error('Produkt nicht gefunden');
-        return;
+        setProduct(null);
+      } else {
+        setProduct(data);
+        toast.success(`Produkt gefunden: ${data.name}`);
       }
-
-      setProduct(data);
-      toast.success(`${data.name} gefunden!`);
     } catch (error) {
-      console.error('Error fetching product:', error);
-      toast.error('Fehler beim Laden des Produkts');
+      console.error('Search error:', error);
+      toast.error('Fehler bei der Suche');
     } finally {
       setLoading(false);
     }
   };
 
   const handleManualSearch = async () => {
-    if (!manualCode) return;
-    await handleBarcodeScan(manualCode);
-    setManualCode('');
+    if (!scannedCode.trim()) {
+      toast.error('Bitte Barcode eingeben');
+      return;
+    }
+    await searchProduct(scannedCode);
   };
 
   const adjustStock = async () => {
-    if (!product || adjustQuantity === 0) return;
+    if (!product) return;
 
+    setLoading(true);
     try {
-      const newStock = Math.max(0, product.current_stock + adjustQuantity);
+      let newStock = product.current_stock;
       
+      switch (adjustmentType) {
+        case 'add':
+          newStock += quantity;
+          break;
+        case 'remove':
+          newStock = Math.max(0, newStock - quantity);
+          break;
+        case 'set':
+          newStock = quantity;
+          break;
+      }
+
       const { error } = await supabase
         .from('products')
         .update({ 
@@ -159,39 +237,46 @@ export default function MobileScannerPage() {
 
       if (error) throw error;
 
+      toast.success(`Bestand aktualisiert: ${newStock} Stück`);
       setProduct({ ...product, current_stock: newStock });
-      toast.success(`Bestand aktualisiert: ${newStock}`);
-      setShowAdjustModal(false);
-      setAdjustQuantity(0);
+      
+      // Reset for next scan
+      setTimeout(() => {
+        setProduct(null);
+        setScannedCode('');
+        setQuantity(1);
+        if (!manualMode) {
+          startScanning();
+        }
+      }, 2000);
     } catch (error) {
-      console.error('Error updating stock:', error);
+      console.error('Stock adjustment error:', error);
       toast.error('Fehler beim Aktualisieren');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const toggleFlash = () => {
-    if (streamRef.current) {
-      const track = streamRef.current.getVideoTracks()[0];
-      const capabilities = track.getCapabilities() as any;
-      if (capabilities.torch) {
-        track.applyConstraints({
-          advanced: [{ torch: !flashOn }]
-        } as any);
-        setFlashOn(!flashOn);
+  const toggleFlash = async () => {
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      const track = stream.getVideoTracks()[0];
+      
+      if (track.getCapabilities && 'torch' in track.getCapabilities()) {
+        const newFlashState = !flashOn;
+        await track.applyConstraints({
+          // @ts-ignore
+          advanced: [{ torch: newFlashState }]
+        });
+        setFlashOn(newFlashState);
+      } else {
+        toast.error('Taschenlampe nicht verfügbar');
       }
     }
   };
 
-  const switchCamera = () => {
-    setFacingMode(facingMode === 'environment' ? 'user' : 'environment');
-    if (scanning) {
-      stopScanning();
-      setTimeout(() => startScanning(), 100);
-    }
-  };
-
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
+    <div className="min-h-screen bg-gray-900 text-white pb-20">
       {/* Header */}
       <div className="fixed top-0 left-0 right-0 bg-black bg-opacity-80 backdrop-blur-sm z-50">
         <div className="flex items-center justify-between p-4">
@@ -202,244 +287,301 @@ export default function MobileScannerPage() {
             <ArrowLeft className="h-6 w-6" />
           </button>
           <h1 className="text-lg font-semibold">Barcode Scanner</h1>
-          <div className="w-10" />
+          <button
+            onClick={() => setManualMode(!manualMode)}
+            className="p-2 rounded-lg bg-gray-800"
+          >
+            {manualMode ? <Camera className="h-6 w-6" /> : <Search className="h-6 w-6" />}
+          </button>
         </div>
       </div>
 
-      {/* Scanner View */}
-      {scanning && (
-        <div className="fixed inset-0 z-40">
-          <video
-            ref={videoRef}
-            className="w-full h-full object-cover"
-            autoPlay
-            playsInline
-            muted
-          />
-          
-          {/* Scanner Overlay */}
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="relative">
-              <div className="w-64 h-64 border-2 border-white rounded-lg">
-                <div className="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-orange-500 rounded-tl-lg" />
-                <div className="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-orange-500 rounded-tr-lg" />
-                <div className="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-orange-500 rounded-bl-lg" />
-                <div className="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-orange-500 rounded-br-lg" />
-              </div>
-              <p className="text-center mt-4 text-white drop-shadow-lg">
-                Barcode in den Rahmen halten
-              </p>
-            </div>
-          </div>
-
-          {/* Scanner Controls */}
-          <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black to-transparent">
-            <div className="flex justify-center gap-4">
-              <button
-                onClick={toggleFlash}
-                className="p-3 bg-gray-800 rounded-full"
-              >
-                <Flashlight className={`h-6 w-6 ${flashOn ? 'text-yellow-400' : 'text-gray-400'}`} />
-              </button>
-              <button
-                onClick={stopScanning}
-                className="p-4 bg-red-600 rounded-full"
-              >
-                <X className="h-8 w-8" />
-              </button>
-              <button
-                onClick={switchCamera}
-                className="p-3 bg-gray-800 rounded-full"
-              >
-                <SwitchCamera className="h-6 w-6" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Main Content */}
       <div className="pt-20 p-4">
-        {!scanning && !product && (
-          <>
-            {/* Start Scanner Button */}
-            <button
-              onClick={startScanning}
-              className="w-full bg-orange-600 hover:bg-orange-700 text-white py-6 rounded-lg flex items-center justify-center gap-3 mb-6"
-            >
-              <Camera className="h-8 w-8" />
-              <span className="text-xl font-semibold">Scanner starten</span>
-            </button>
+        {/* iOS Instructions */}
+        {isIOS && showInstructions && (
+          <div className="bg-blue-900 bg-opacity-50 rounded-lg p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <Smartphone className="h-6 w-6 text-blue-400 flex-shrink-0 mt-1" />
+              <div>
+                <h3 className="font-semibold mb-1">iOS Kamera-Zugriff</h3>
+                <p className="text-sm text-gray-300 mb-2">
+                  Für den Scanner benötigt die App Zugriff auf Ihre Kamera.
+                </p>
+                <p className="text-sm text-gray-400">
+                  Falls Sie gefragt werden, tippen Sie auf "Erlauben".
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
-            {/* Manual Entry */}
-            <div className="bg-gray-800 rounded-lg p-4">
-              <h2 className="text-lg font-semibold mb-3">Manuelle Eingabe</h2>
+        {/* Permission Denied Message */}
+        {hasPermission === false && (
+          <div className="bg-red-900 bg-opacity-50 rounded-lg p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="h-6 w-6 text-red-400 flex-shrink-0 mt-1" />
+              <div>
+                <h3 className="font-semibold mb-1">Kamera-Zugriff verweigert</h3>
+                <p className="text-sm text-gray-300 mb-2">
+                  Bitte erlauben Sie den Kamera-Zugriff in den Einstellungen:
+                </p>
+                <ol className="text-sm text-gray-400 list-decimal list-inside">
+                  <li>Öffnen Sie die iOS Einstellungen</li>
+                  <li>Safari → Kamera → Erlauben</li>
+                  <li>Laden Sie diese Seite neu</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!manualMode ? (
+          /* Camera Scanner */
+          <div className="space-y-4">
+            {!scanning && !product && (
+              <button
+                onClick={startScanning}
+                disabled={hasPermission === false}
+                className={`w-full py-4 rounded-lg font-semibold text-lg flex items-center justify-center gap-2 ${
+                  hasPermission === false 
+                    ? 'bg-gray-700 text-gray-400' 
+                    : 'bg-orange-600 hover:bg-orange-700'
+                }`}
+              >
+                <Camera className="h-6 w-6" />
+                Scanner starten
+              </button>
+            )}
+
+            {scanning && (
+              <div className="relative rounded-lg overflow-hidden bg-black">
+                <video
+                  ref={videoRef}
+                  className="w-full aspect-[4/3] object-cover"
+                />
+                <div className="absolute inset-0 border-2 border-orange-500 m-8 rounded-lg" />
+                
+                {/* Scanner Controls */}
+                <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4">
+                  <button
+                    onClick={toggleFlash}
+                    className="p-3 bg-gray-800 bg-opacity-80 rounded-full"
+                  >
+                    <Flashlight className={`h-6 w-6 ${flashOn ? 'text-yellow-400' : 'text-gray-400'}`} />
+                  </button>
+                  <button
+                    onClick={stopScanning}
+                    className="p-3 bg-red-600 rounded-full"
+                  >
+                    <X className="h-6 w-6" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Manual Input */
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Barcode / SKU eingeben
+              </label>
               <div className="flex gap-2">
                 <input
                   type="text"
-                  value={manualCode}
-                  onChange={(e) => setManualCode(e.target.value)}
-                  placeholder="Barcode oder SKU eingeben..."
-                  className="flex-1 px-4 py-3 bg-gray-700 rounded-lg text-white placeholder-gray-400"
-                  onKeyPress={(e) => e.key === 'Enter' && handleManualSearch()}
+                  value={scannedCode}
+                  onChange={(e) => setScannedCode(e.target.value)}
+                  placeholder="z.B. 123456789"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-lg"
+                  autoFocus
                 />
                 <button
                   onClick={handleManualSearch}
-                  className="px-6 py-3 bg-blue-600 rounded-lg"
+                  disabled={loading || !scannedCode}
+                  className="px-4 py-3 bg-orange-600 rounded-lg"
                 >
                   <Search className="h-6 w-6" />
                 </button>
               </div>
             </div>
-
-            {/* Quick Actions */}
-            <div className="mt-6 grid grid-cols-2 gap-4">
-              <button
-                onClick={() => window.location.href = '/mobile/picking'}
-                className="bg-gray-800 p-6 rounded-lg flex flex-col items-center gap-2"
-              >
-                <Package className="h-10 w-10 text-blue-500" />
-                <span>Kommissionierung</span>
-              </button>
-              <button
-                onClick={() => window.location.href = '/mobile/inventory'}
-                className="bg-gray-800 p-6 rounded-lg flex flex-col items-center gap-2"
-              >
-                <ClipboardList className="h-10 w-10 text-green-500" />
-                <span>Inventur</span>
-              </button>
-            </div>
-          </>
-        )}
-
-        {/* Loading State */}
-        {loading && (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-12 w-12 animate-spin" />
           </div>
         )}
 
-        {/* Product Details */}
-        {product && !loading && (
-          <div className="bg-gray-800 rounded-lg overflow-hidden">
-            {product.image_url && (
-              <img
-                src={product.image_url}
-                alt={product.name}
-                className="w-full h-48 object-cover"
-              />
-            )}
-            
-            <div className="p-4">
-              <h2 className="text-xl font-bold mb-2">{product.name}</h2>
-              <p className="text-gray-400 mb-4">SKU: {product.sku}</p>
-              
-              {/* Stock Info */}
-              <div className="bg-gray-700 rounded-lg p-4 mb-4">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-gray-400">Aktueller Bestand:</span>
-                  <span className={`text-2xl font-bold ${
-                    product.current_stock <= product.minimum_stock ? 'text-red-500' : 'text-green-500'
-                  }`}>
-                    {product.current_stock}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-400">Mindestbestand:</span>
-                  <span className="text-lg">{product.minimum_stock}</span>
-                </div>
-                {product.current_stock <= product.minimum_stock && (
-                  <div className="mt-2 flex items-center gap-2 text-orange-500">
-                    <AlertCircle className="h-5 w-5" />
-                    <span className="text-sm">Bestand niedrig!</span>
-                  </div>
+        {/* Product Result */}
+        {product && (
+          <div className="mt-6 space-y-4">
+            <div className="bg-gray-800 rounded-lg p-4">
+              <div className="flex items-start gap-4">
+                {product.image_url && (
+                  <img
+                    src={product.image_url}
+                    alt={product.name}
+                    className="w-20 h-20 rounded-lg object-cover"
+                  />
                 )}
+                <div className="flex-1">
+                  <h3 className="font-semibold text-lg">{product.name}</h3>
+                  <p className="text-gray-400">SKU: {product.sku}</p>
+                  <div className="flex items-center gap-2 mt-2">
+                    <MapPin className="h-4 w-4 text-blue-500" />
+                    <span className="text-sm">{product.storage_location || 'Kein Lagerplatz'}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="mt-4 p-3 bg-gray-700 rounded-lg">
+                <p className="text-sm text-gray-400">Aktueller Bestand</p>
+                <p className="text-2xl font-bold">{product.current_stock} Stück</p>
+              </div>
+            </div>
+
+            {/* Stock Adjustment */}
+            <div className="bg-gray-800 rounded-lg p-4">
+              <h4 className="font-medium mb-3">Bestand anpassen</h4>
+              
+              {/* Adjustment Type */}
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <button
+                  onClick={() => setAdjustmentType('add')}
+                  className={`py-2 rounded-lg font-medium ${
+                    adjustmentType === 'add' 
+                      ? 'bg-green-600' 
+                      : 'bg-gray-700'
+                  }`}
+                >
+                  + Hinzu
+                </button>
+                <button
+                  onClick={() => setAdjustmentType('remove')}
+                  className={`py-2 rounded-lg font-medium ${
+                    adjustmentType === 'remove' 
+                      ? 'bg-red-600' 
+                      : 'bg-gray-700'
+                  }`}
+                >
+                  - Entnahme
+                </button>
+                <button
+                  onClick={() => setAdjustmentType('set')}
+                  className={`py-2 rounded-lg font-medium ${
+                    adjustmentType === 'set' 
+                      ? 'bg-blue-600' 
+                      : 'bg-gray-700'
+                  }`}
+                >
+                  = Setzen
+                </button>
               </div>
 
-              {/* Location */}
-              {product.storage_location && (
-                <div className="flex items-center gap-2 mb-4 text-blue-400">
-                  <MapPin className="h-5 w-5" />
-                  <span className="font-medium">{product.storage_location}</span>
-                </div>
-              )}
-
-              {/* Actions */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Quantity Input */}
+              <div className="flex items-center gap-4 mb-4">
                 <button
-                  onClick={() => setShowAdjustModal(true)}
-                  className="bg-blue-600 py-3 rounded-lg font-medium"
+                  onClick={() => setQuantity(Math.max(1, quantity - 1))}
+                  className="p-3 bg-gray-700 rounded-lg"
                 >
-                  Bestand anpassen
+                  <Minus className="h-5 w-5" />
                 </button>
+                <input
+                  type="number"
+                  value={quantity}
+                  onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="flex-1 bg-gray-700 rounded-lg px-4 py-3 text-center text-xl font-bold"
+                />
+                <button
+                  onClick={() => setQuantity(quantity + 1)}
+                  className="p-3 bg-gray-700 rounded-lg"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Preview */}
+              <div className="p-3 bg-gray-700 rounded-lg mb-4 text-center">
+                <p className="text-sm text-gray-400">Neuer Bestand</p>
+                <p className="text-xl font-bold">
+                  {adjustmentType === 'add' 
+                    ? product.current_stock + quantity
+                    : adjustmentType === 'remove'
+                    ? Math.max(0, product.current_stock - quantity)
+                    : quantity
+                  } Stück
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="grid grid-cols-2 gap-3">
                 <button
                   onClick={() => {
                     setProduct(null);
-                    startScanning();
+                    setScannedCode('');
+                    if (!manualMode) startScanning();
                   }}
-                  className="bg-gray-700 py-3 rounded-lg font-medium"
+                  className="py-3 bg-gray-700 rounded-lg font-semibold"
                 >
-                  Neuer Scan
+                  Abbrechen
+                </button>
+                <button
+                  onClick={adjustStock}
+                  disabled={loading}
+                  className="py-3 bg-orange-600 rounded-lg font-semibold flex items-center justify-center gap-2"
+                >
+                  {loading ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <>
+                      <Check className="h-5 w-5" />
+                      Speichern
+                    </>
+                  )}
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Quick Actions */}
+        {!scanning && !product && (
+          <div className="mt-8 grid grid-cols-2 gap-4">
+            <Link
+              href="/mobile/inventory"
+              className="bg-gray-800 rounded-lg p-4 flex flex-col items-center gap-2"
+            >
+              <ClipboardList className="h-8 w-8 text-blue-500" />
+              <span className="text-sm">Inventur</span>
+            </Link>
+            <Link
+              href="/mobile/transfer"
+              className="bg-gray-800 rounded-lg p-4 flex flex-col items-center gap-2"
+            >
+              <Package className="h-8 w-8 text-green-500" />
+              <span className="text-sm">Umlagerung</span>
+            </Link>
           </div>
         )}
       </div>
 
-      {/* Adjust Stock Modal */}
-      {showAdjustModal && product && (
-        <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-sm">
-            <h3 className="text-xl font-bold mb-4">Bestand anpassen</h3>
-            <p className="text-gray-400 mb-6">{product.name}</p>
-            
-            <div className="flex items-center justify-center gap-4 mb-6">
-              <button
-                onClick={() => setAdjustQuantity(adjustQuantity - 1)}
-                className="p-3 bg-red-600 rounded-full"
-              >
-                <Minus className="h-6 w-6" />
-              </button>
-              
-              <div className="text-center">
-                <p className="text-3xl font-bold">
-                  {product.current_stock + adjustQuantity}
-                </p>
-                <p className="text-sm text-gray-400">
-                  {adjustQuantity > 0 ? '+' : ''}{adjustQuantity}
-                </p>
-              </div>
-              
-              <button
-                onClick={() => setAdjustQuantity(adjustQuantity + 1)}
-                className="p-3 bg-green-600 rounded-full"
-              >
-                <Plus className="h-6 w-6" />
-              </button>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => {
-                  setShowAdjustModal(false);
-                  setAdjustQuantity(0);
-                }}
-                className="py-3 bg-gray-700 rounded-lg"
-              >
-                Abbrechen
-              </button>
-              <button
-                onClick={adjustStock}
-                disabled={adjustQuantity === 0}
-                className="py-3 bg-blue-600 rounded-lg disabled:opacity-50"
-              >
-                Speichern
-              </button>
-            </div>
-          </div>
+      {/* Bottom Navigation */}
+      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm">
+        <div className="grid grid-cols-4 py-2">
+          <Link href="/mobile" className="flex flex-col items-center gap-1 py-2 text-gray-400">
+            <Home className="h-6 w-6" />
+            <span className="text-xs">Home</span>
+          </Link>
+          <Link href="/mobile/scan" className="flex flex-col items-center gap-1 py-2 text-orange-500">
+            <QrCode className="h-6 w-6" />
+            <span className="text-xs">Scan</span>
+          </Link>
+          <Link href="/mobile/picking" className="flex flex-col items-center gap-1 py-2 text-gray-400">
+            <ShoppingCart className="h-6 w-6" />
+            <span className="text-xs">Picken</span>
+          </Link>
+          <Link href="/mobile/locations" className="flex flex-col items-center gap-1 py-2 text-gray-400">
+            <MapPin className="h-6 w-6" />
+            <span className="text-xs">Plätze</span>
+          </Link>
         </div>
-      )}
+      </div>
     </div>
   );
 }
