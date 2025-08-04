@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline - Lager App</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #111827;
+            color: white;
+            text-align: center;
+            padding: 20px;
+        }
+        h1 { font-size: 2rem; margin-bottom: 1rem; }
+        p { color: #9CA3AF; }
+        button {
+            background: #ea580c;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 1rem;
+            margin-top: 1rem;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div>
+        <h1>Sie sind offline</h1>
+        <p>Bitte überprüfen Sie Ihre Internetverbindung</p>
+        <button onclick="window.location.reload()">Neu laden</button>
+    </div>
+</body>
+</html>

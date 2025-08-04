@@ -12,6 +12,7 @@
     "@supabase/supabase-js": "^2.45.4",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
+    "@zxing/library": "^0.21.3",
     "autoprefixer": "^10.4.20",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.454.0",
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.11",
-    "@types/qrcode": "^1.5.5"
+    "@types/qrcode": "^1.5.5",
+    "@types/web-app-manifest": "^1.0.9"
   }
 }
