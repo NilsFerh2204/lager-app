@@ -17,10 +17,11 @@ import {
   Save,
   CameraOff,
   Search,
-  Scan
+  Scan,
+  AlertCircle
 } from 'lucide-react';
 import Link from 'next/link';
-import { BrowserMultiFormatReader } from '@zxing/library';
+import { BrowserMultiFormatReader, NotFoundException } from '@zxing/library';
 import toast from 'react-hot-toast';
 
 interface Product {
@@ -44,11 +45,15 @@ export default function MobileScannerPage() {
   const [showCamera, setShowCamera] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
+  const [cameraError, setCameraError] = useState('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
-  const controlsRef = useRef<any>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animationRef = useRef<number | null>(null);
   const lastScannedRef = useRef<string>('');
+  const scanCountRef = useRef<number>(0);
 
   useEffect(() => {
     return () => {
@@ -58,105 +63,139 @@ export default function MobileScannerPage() {
 
   const startCamera = async () => {
     try {
-      // First check if camera permissions are available
-      const permissions = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-        .then(() => true)
-        .catch(() => false);
-      
-      if (!permissions) {
-        toast.error('Kamera-Berechtigung verweigert. Bitte erlauben Sie den Kamerazugriff.');
-        return;
-      }
-
+      setCameraError('');
       setShowCamera(true);
       setScanStatus('Kamera wird gestartet...');
       
-      // Stop any existing camera
-      if (controlsRef.current) {
-        controlsRef.current.stop();
-        controlsRef.current = null;
-      }
+      // Request camera permission
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false 
+      });
       
-      // Initialize reader without hints (let it use defaults)
-      readerRef.current = new BrowserMultiFormatReader();
+      streamRef.current = stream;
       
-      console.log('Starting camera scan...');
-      
-      // Wait a bit for the video element to be ready
-      setTimeout(async () => {
-        try {
-          // Start decoding from camera
-          controlsRef.current = await readerRef.current.decodeFromVideoDevice(
-            undefined, // use default camera
-            videoRef.current,
-            (result, error) => {
-              if (result) {
-                const code = result.getText();
-                console.log('Barcode detected:', code);
-                
-                // Prevent duplicate scans
-                if (code !== lastScannedRef.current && isScanning) {
-                  lastScannedRef.current = code;
-                  handleBarcodeDetected(code);
-                }
-              }
-              if (error && !error.message.includes('NotFoundException')) {
-                console.error('Scan error:', error);
-              }
-            }
-          );
-          
-          setIsScanning(true);
-          setScanStatus('Barcode in den Rahmen halten...');
-        } catch (innerError) {
-          console.error('Camera start error:', innerError);
-          toast.error('Fehler beim Starten der Kamera');
-          setShowCamera(false);
-          setIsScanning(false);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('playsinline', 'true');
+        videoRef.current.setAttribute('webkit-playsinline', 'true');
+        videoRef.current.muted = true;
+        
+        await new Promise((resolve) => {
+          videoRef.current!.onloadedmetadata = () => {
+            videoRef.current!.play();
+            resolve(true);
+          };
+        });
+
+        // Initialize the reader
+        if (!readerRef.current) {
+          readerRef.current = new BrowserMultiFormatReader();
         }
-      }, 100);
-      
+
+        setIsScanning(true);
+        setScanStatus('Barcode in den Rahmen halten...');
+        scanCountRef.current = 0;
+        
+        // Start scanning
+        scanBarcode();
+      }
     } catch (error: any) {
       console.error('Camera error:', error);
-      toast.error(error.message || 'Kamera konnte nicht gestartet werden');
-      setScanStatus('Fehler beim Kamerazugriff');
+      setCameraError(error.message || 'Kamera konnte nicht gestartet werden');
+      toast.error('Kamera-Fehler: ' + (error.message || 'Unbekannter Fehler'));
       setShowCamera(false);
       setIsScanning(false);
     }
+  };
+
+  const scanBarcode = () => {
+    if (!videoRef.current || !canvasRef.current || !readerRef.current || !isScanning) {
+      return;
+    }
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+
+    if (!context || video.readyState !== video.HAVE_ENOUGH_DATA) {
+      animationRef.current = requestAnimationFrame(scanBarcode);
+      return;
+    }
+
+    // Update scan count for debugging
+    scanCountRef.current++;
+    if (scanCountRef.current % 30 === 0) { // Every ~1 second at 30fps
+      setScanStatus(`Scanning... (${Math.floor(scanCountRef.current / 30)}s)`);
+    }
+
+    // Set canvas dimensions
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    // Draw the video frame to canvas
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Try to decode
+    readerRef.current
+      .decodeFromCanvas(canvas)
+      .then(result => {
+        const code = result.getText();
+        console.log('Barcode detected:', code);
+        
+        if (code && code !== lastScannedRef.current) {
+          lastScannedRef.current = code;
+          handleBarcodeDetected(code);
+        }
+      })
+      .catch(err => {
+        if (!(err instanceof NotFoundException)) {
+          console.error('Decode error:', err);
+        }
+        // Continue scanning
+        animationRef.current = requestAnimationFrame(scanBarcode);
+      });
   };
 
   const stopCamera = () => {
-    try {
-      // Stop the reader controls
-      if (controlsRef.current) {
-        controlsRef.current.stop();
-        controlsRef.current = null;
-      }
-      
-      // Reset the reader
-      if (readerRef.current) {
-        readerRef.current.reset();
-        readerRef.current = null;
-      }
-      
-      // Clear video
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-      
-      setShowCamera(false);
-      setIsScanning(false);
-      setScanStatus('');
-      lastScannedRef.current = '';
-    } catch (error) {
-      console.error('Error stopping camera:', error);
+    setIsScanning(false);
+    
+    // Cancel animation frame
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
     }
+
+    // Stop video stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    // Clear video
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    // Reset reader
+    if (readerRef.current) {
+      readerRef.current.reset();
+      readerRef.current = null;
+    }
+
+    setShowCamera(false);
+    setScanStatus('');
+    setCameraError('');
+    lastScannedRef.current = '';
+    scanCountRef.current = 0;
   };
 
   const handleBarcodeDetected = async (code: string) => {
-    // Prevent multiple scans
-    if (!isScanning) return;
-    
+    // Stop scanning
     setIsScanning(false);
     
     // Vibration feedback
@@ -166,7 +205,7 @@ export default function MobileScannerPage() {
     
     setScanStatus('✓ Barcode erfolgreich gescannt!');
     
-    // Stop camera and process barcode
+    // Process barcode after short delay
     setTimeout(() => {
       stopCamera();
       setManualBarcode(code);
@@ -296,6 +335,13 @@ export default function MobileScannerPage() {
     stopCamera();
   };
 
+  // Manual barcode entry for testing
+  const handleManualScan = () => {
+    if (showCamera && manualBarcode) {
+      handleBarcodeDetected(manualBarcode);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       <div className="p-4 pb-24">
@@ -353,6 +399,15 @@ export default function MobileScannerPage() {
                   ref={videoRef}
                   className="w-full aspect-video object-cover"
                   style={{ maxHeight: '400px' }}
+                  playsInline
+                  muted
+                  autoPlay
+                />
+                
+                {/* Hidden canvas for processing */}
+                <canvas
+                  ref={canvasRef}
+                  style={{ display: 'none' }}
                 />
                 
                 {/* Scan Frame */}
@@ -381,12 +436,30 @@ export default function MobileScannerPage() {
                 </div>
 
                 {/* Status Bar */}
-                <div className="absolute bottom-4 left-4 right-4 bg-black bg-opacity-75 rounded-lg p-2 text-center">
+                <div className="absolute bottom-4 left-4 right-4 bg-black bg-opacity-75 rounded-lg p-2">
                   <div className="flex items-center justify-center gap-2 text-sm">
                     <Scan className="h-4 w-4 animate-pulse" />
                     {scanStatus}
                   </div>
+                  
+                  {/* Manual scan button for testing */}
+                  {manualBarcode && (
+                    <button
+                      onClick={handleManualScan}
+                      className="mt-2 w-full bg-orange-600 rounded py-1 text-xs"
+                    >
+                      Manuell scannen: {manualBarcode}
+                    </button>
+                  )}
                 </div>
+
+                {/* Error display */}
+                {cameraError && (
+                  <div className="absolute top-4 left-4 right-4 bg-red-900 bg-opacity-75 rounded-lg p-2 text-sm">
+                    <AlertCircle className="inline h-4 w-4 mr-1" />
+                    {cameraError}
+                  </div>
+                )}
 
                 {/* Close Button */}
                 <button
@@ -407,6 +480,9 @@ export default function MobileScannerPage() {
                   <li>2. Produkt wird automatisch gefunden oder neu angelegt</li>
                   <li>3. Bestand anpassen und speichern</li>
                 </ol>
+                <p className="text-xs mt-2 text-gray-400">
+                  Tipp: Halten Sie den Barcode ruhig und gut beleuchtet in den Rahmen
+                </p>
               </div>
             )}
           </div>
