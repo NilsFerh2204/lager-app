@@ -20,20 +20,23 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+interface Product {
+  id: string;
+  name: string;
+  sku: string;
+  barcode: string | null;
+  storage_location: string | null;
+  current_stock: number;
+  image_url: string | null;
+}
+
 interface OrderItem {
   id: string;
+  order_id: string;
   product_id: string;
   quantity: number;
   picked_quantity?: number;
-  product: {
-    id: string;
-    name: string;
-    sku: string;
-    barcode: string | null;
-    storage_location: string | null;
-    current_stock: number;
-    image_url: string | null;
-  };
+  product?: Product;
 }
 
 interface Order {
@@ -42,7 +45,7 @@ interface Order {
   customer_name: string;
   status: string;
   created_at: string;
-  items: OrderItem[];
+  order_items?: OrderItem[];
 }
 
 export default function MobilePickingPage() {
@@ -59,20 +62,36 @@ export default function MobilePickingPage() {
 
   const fetchOrders = async () => {
     try {
-      const { data, error } = await supabase
+      // First fetch orders
+      const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
-        .select(`
-          *,
-          items:order_items(
-            *,
-            product:products(*)
-          )
-        `)
+        .select('*')
         .eq('status', 'pending')
         .order('created_at', { ascending: true });
 
-      if (error) throw error;
-      setOrders(data || []);
+      if (ordersError) throw ordersError;
+
+      // Then fetch order items with products for each order
+      const ordersWithItems = await Promise.all(
+        (ordersData || []).map(async (order) => {
+          const { data: itemsData, error: itemsError } = await supabase
+            .from('order_items')
+            .select(`
+              *,
+              product:products(*)
+            `)
+            .eq('order_id', order.id);
+
+          if (itemsError) {
+            console.error('Error fetching items for order:', order.id, itemsError);
+            return { ...order, order_items: [] };
+          }
+
+          return { ...order, order_items: itemsData || [] };
+        })
+      );
+
+      setOrders(ordersWithItems);
     } catch (error) {
       console.error('Error fetching orders:', error);
       toast.error('Fehler beim Laden der Bestellungen');
@@ -82,11 +101,11 @@ export default function MobilePickingPage() {
   };
 
   const handleBarcodeInput = async () => {
-    if (!scannedBarcode.trim() || !selectedOrder) return;
+    if (!scannedBarcode.trim() || !selectedOrder || !selectedOrder.order_items) return;
 
     // Find item with this barcode
-    const item = selectedOrder.items.find(
-      item => item.product.barcode === scannedBarcode
+    const item = selectedOrder.order_items.find(
+      item => item.product && item.product.barcode === scannedBarcode
     );
 
     if (!item) {
@@ -103,11 +122,11 @@ export default function MobilePickingPage() {
 
     // Mark as picked
     setPickedItems(prev => new Set([...prev, item.id]));
-    toast.success(`✓ ${item.product.name} gepickt`);
+    toast.success(`✓ ${item.product?.name || 'Produkt'} gepickt`);
     setScannedBarcode('');
 
     // Check if all items are picked
-    if (pickedItems.size + 1 === selectedOrder.items.length) {
+    if (pickedItems.size + 1 === selectedOrder.order_items.length) {
       setTimeout(() => {
         completeOrder();
       }, 1000);
@@ -200,7 +219,7 @@ export default function MobilePickingPage() {
                     </div>
                     <div className="text-right">
                       <p className="text-sm text-gray-400">
-                        {order.items.length} Artikel
+                        {order.order_items?.length || 0} Artikel
                       </p>
                       <p className="text-xs text-gray-500">
                         <Clock className="inline h-3 w-3 mr-1" />
@@ -227,7 +246,7 @@ export default function MobilePickingPage() {
         ) : (
           // Picking Mode
           <div className="space-y-4">
-            {selectedOrder && (
+            {selectedOrder && selectedOrder.order_items && (
               <>
                 {/* Order Header */}
                 <div className="bg-gray-800 rounded-lg p-4">
@@ -237,13 +256,13 @@ export default function MobilePickingPage() {
                   <p className="text-gray-400">{selectedOrder.customer_name}</p>
                   <div className="mt-2 flex items-center gap-4">
                     <span className="text-sm">
-                      Fortschritt: {pickedItems.size} / {selectedOrder.items.length}
+                      Fortschritt: {pickedItems.size} / {selectedOrder.order_items.length}
                     </span>
                     <div className="flex-1 bg-gray-700 rounded-full h-2">
                       <div
                         className="bg-green-500 h-2 rounded-full transition-all"
                         style={{
-                          width: `${(pickedItems.size / selectedOrder.items.length) * 100}%`
+                          width: `${(pickedItems.size / selectedOrder.order_items.length) * 100}%`
                         }}
                       />
                     </div>
@@ -282,7 +301,7 @@ export default function MobilePickingPage() {
                 {/* Product List */}
                 <div className="space-y-3">
                   <h3 className="font-medium text-gray-400">Zu pickende Produkte:</h3>
-                  {selectedOrder.items.map(item => {
+                  {selectedOrder.order_items.map(item => {
                     const isPicked = pickedItems.has(item.id);
                     
                     return (
@@ -305,12 +324,12 @@ export default function MobilePickingPage() {
                           
                           <div className="flex-1">
                             <h4 className={`font-semibold ${isPicked ? 'line-through' : ''}`}>
-                              {item.product.name}
+                              {item.product?.name || 'Unbekanntes Produkt'}
                             </h4>
                             <p className="text-sm text-gray-400">
-                              SKU: {item.product.sku}
+                              SKU: {item.product?.sku || 'N/A'}
                             </p>
-                            {item.product.barcode && (
+                            {item.product?.barcode && (
                               <p className="text-xs text-gray-500">
                                 Barcode: {item.product.barcode}
                               </p>
@@ -319,7 +338,7 @@ export default function MobilePickingPage() {
                               <span className="text-sm">
                                 Menge: <strong>{item.quantity}</strong>
                               </span>
-                              {item.product.storage_location && (
+                              {item.product?.storage_location && (
                                 <div className="flex items-center gap-1 text-sm text-blue-400">
                                   <MapPin className="h-4 w-4" />
                                   {item.product.storage_location}
@@ -328,7 +347,7 @@ export default function MobilePickingPage() {
                             </div>
                           </div>
 
-                          {item.product.image_url && (
+                          {item.product?.image_url && (
                             <img
                               src={item.product.image_url}
                               alt={item.product.name}
@@ -342,7 +361,7 @@ export default function MobilePickingPage() {
                 </div>
 
                 {/* Complete Button */}
-                {pickedItems.size === selectedOrder.items.length && (
+                {pickedItems.size === selectedOrder.order_items.length && (
                   <button
                     onClick={completeOrder}
                     className="w-full bg-green-600 rounded-lg py-4 font-semibold flex items-center justify-center gap-2"
