@@ -16,7 +16,8 @@ import {
   QrCode,
   Loader2,
   CheckCircle,
-  Camera
+  Camera,
+  RefreshCw
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -55,6 +56,7 @@ export default function MobilePickingPage() {
   const [scanMode, setScanMode] = useState(false);
   const [scannedBarcode, setScannedBarcode] = useState('');
   const [pickedItems, setPickedItems] = useState<Set<string>>(new Set());
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     fetchOrders();
@@ -62,65 +64,110 @@ export default function MobilePickingPage() {
 
   const fetchOrders = async () => {
     try {
-      // First fetch orders
+      console.log('Fetching orders...');
+      
+      // First fetch all pending orders
       const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
         .select('*')
         .eq('status', 'pending')
         .order('created_at', { ascending: true });
 
-      if (ordersError) throw ordersError;
+      if (ordersError) {
+        console.error('Orders error:', ordersError);
+        throw ordersError;
+      }
 
-      // For each order, fetch items and products separately
-      const ordersWithItems = await Promise.all(
-        (ordersData || []).map(async (order) => {
-          // Get order items
-          const { data: itemsData, error: itemsError } = await supabase
-            .from('order_items')
-            .select('*')
-            .eq('order_id', order.id);
+      console.log('Found orders:', ordersData);
 
-          if (itemsError) {
-            console.error('Error fetching items for order:', order.id, itemsError);
+      if (!ordersData || ordersData.length === 0) {
+        setOrders([]);
+        setLoading(false);
+        return;
+      }
+
+      // For each order, fetch the complete data
+      const ordersWithFullData = await Promise.all(
+        ordersData.map(async (order) => {
+          try {
+            // Get order items for this order
+            const { data: itemsData, error: itemsError } = await supabase
+              .from('order_items')
+              .select('*')
+              .eq('order_id', order.id);
+
+            if (itemsError) {
+              console.error(`Error fetching items for order ${order.id}:`, itemsError);
+              return { ...order, order_items: [] };
+            }
+
+            console.log(`Order ${order.id} items:`, itemsData);
+
+            if (!itemsData || itemsData.length === 0) {
+              return { ...order, order_items: [] };
+            }
+
+            // Get all unique product IDs from the order items
+            const productIds = [...new Set(itemsData.map(item => item.product_id))];
+            console.log('Product IDs to fetch:', productIds);
+
+            // Fetch all products for these IDs
+            const { data: productsData, error: productsError } = await supabase
+              .from('products')
+              .select('*')
+              .in('id', productIds);
+
+            if (productsError) {
+              console.error('Products error:', productsError);
+            }
+
+            console.log('Fetched products:', productsData);
+
+            // Create a map of products by ID for easy lookup
+            const productsMap = new Map<string, Product>();
+            (productsData || []).forEach(product => {
+              productsMap.set(product.id, product);
+            });
+
+            // Combine items with their products
+            const itemsWithProducts = itemsData.map(item => {
+              const product = productsMap.get(item.product_id);
+              if (!product) {
+                console.warn(`Product not found for ID: ${item.product_id}`);
+              }
+              return {
+                ...item,
+                product: product || null
+              };
+            });
+
+            console.log(`Order ${order.id} with products:`, itemsWithProducts);
+
+            return {
+              ...order,
+              order_items: itemsWithProducts
+            };
+          } catch (error) {
+            console.error(`Error processing order ${order.id}:`, error);
             return { ...order, order_items: [] };
           }
-
-          // Get all unique product IDs
-          const productIds = [...new Set(itemsData?.map(item => item.product_id) || [])];
-          
-          // Fetch all products at once
-          const { data: productsData, error: productsError } = await supabase
-            .from('products')
-            .select('*')
-            .in('id', productIds);
-
-          if (productsError) {
-            console.error('Error fetching products:', productsError);
-          }
-
-          // Create a map of products by ID
-          const productsMap = new Map(
-            (productsData || []).map(product => [product.id, product])
-          );
-
-          // Combine items with their products
-          const itemsWithProducts = (itemsData || []).map(item => ({
-            ...item,
-            product: productsMap.get(item.product_id) || null
-          }));
-
-          return { ...order, order_items: itemsWithProducts };
         })
       );
 
-      console.log('Orders with items:', ordersWithItems);
-      setOrders(ordersWithItems);
+      console.log('Final orders with data:', ordersWithFullData);
+      setOrders(ordersWithFullData);
     } catch (error) {
       console.error('Error fetching orders:', error);
       toast.error('Fehler beim Laden der Bestellungen');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
+  };
+
+  const refreshData = async () => {
+    setRefreshing(true);
+    await fetchOrders();
   };
 
   const handleBarcodeInput = async () => {
@@ -182,6 +229,7 @@ export default function MobilePickingPage() {
   };
 
   const startPicking = (order: Order) => {
+    console.log('Starting picking for order:', order);
     setSelectedOrder(order);
     setScanMode(true);
     setPickedItems(new Set());
@@ -194,7 +242,7 @@ export default function MobilePickingPage() {
     setScannedBarcode('');
   };
 
-  // Manual pick for items without barcodes
+  // Manual pick for items without barcodes or when clicking
   const toggleItemPicked = (itemId: string) => {
     if (pickedItems.has(itemId)) {
       setPickedItems(prev => {
@@ -230,14 +278,25 @@ export default function MobilePickingPage() {
           <h1 className="text-2xl font-bold">
             {scanMode ? 'Produkte scannen' : 'Kommissionierung'}
           </h1>
-          {scanMode && (
-            <button
-              onClick={cancelPicking}
-              className="p-2 rounded-lg bg-gray-800"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {!scanMode && (
+              <button
+                onClick={refreshData}
+                disabled={refreshing}
+                className="p-2 rounded-lg bg-gray-800"
+              >
+                <RefreshCw className={`h-5 w-5 ${refreshing ? 'animate-spin' : ''}`} />
+              </button>
+            )}
+            {scanMode && (
+              <button
+                onClick={cancelPicking}
+                className="p-2 rounded-lg bg-gray-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {!scanMode ? (
@@ -247,44 +306,63 @@ export default function MobilePickingPage() {
               <div className="text-center py-8">
                 <ShoppingCart className="h-12 w-12 text-gray-600 mx-auto mb-2" />
                 <p className="text-gray-400">Keine offenen Bestellungen</p>
+                <button
+                  onClick={refreshData}
+                  className="mt-4 text-orange-500 underline"
+                >
+                  Daten aktualisieren
+                </button>
               </div>
             ) : (
-              orders.map(order => (
-                <div
-                  key={order.id}
-                  className="bg-gray-800 rounded-lg p-4 border border-gray-700"
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <h3 className="font-semibold text-lg">
-                        Bestellung #{order.order_number}
-                      </h3>
-                      <p className="text-gray-400">{order.customer_name}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm text-gray-400">
-                        {order.order_items?.length || 0} Artikel
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        <Clock className="inline h-3 w-3 mr-1" />
-                        {new Date(order.created_at).toLocaleTimeString('de-DE', {
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => startPicking(order)}
-                    className="w-full bg-orange-600 rounded-lg py-3 font-medium flex items-center justify-center gap-2"
+              <>
+                <p className="text-sm text-gray-400">
+                  {orders.length} offene Bestellung{orders.length !== 1 ? 'en' : ''}
+                </p>
+                {orders.map(order => (
+                  <div
+                    key={order.id}
+                    className="bg-gray-800 rounded-lg p-4 border border-gray-700"
                   >
-                    <Package className="h-5 w-5" />
-                    Kommissionierung starten
-                    <ChevronRight className="h-5 w-5" />
-                  </button>
-                </div>
-              ))
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <h3 className="font-semibold text-lg">
+                          Bestellung #{order.order_number}
+                        </h3>
+                        <p className="text-gray-400">{order.customer_name}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm text-gray-400">
+                          {order.order_items?.length || 0} Artikel
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          <Clock className="inline h-3 w-3 mr-1" />
+                          {new Date(order.created_at).toLocaleTimeString('de-DE', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </p>
+                      </div>
+                    </div>
+
+                    {order.order_items && order.order_items.length > 0 && (
+                      <div className="mb-3 text-xs text-gray-500">
+                        Produkte: {order.order_items.map(item => 
+                          item.product?.name || 'Unbekannt'
+                        ).join(', ')}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={() => startPicking(order)}
+                      className="w-full bg-orange-600 rounded-lg py-3 font-medium flex items-center justify-center gap-2"
+                    >
+                      <Package className="h-5 w-5" />
+                      Kommissionierung starten
+                      <ChevronRight className="h-5 w-5" />
+                    </button>
+                  </div>
+                ))}
+              </>
             )}
           </div>
         ) : (
@@ -341,15 +419,18 @@ export default function MobilePickingPage() {
                     </button>
                   </div>
                   <p className="text-xs text-gray-400 mt-2">
-                    Tipp: Klicken Sie auf Produkte ohne Barcode zum manuellen Abhaken
+                    Tipp: Klicken Sie auf Produkte zum manuellen Abhaken
                   </p>
                 </div>
 
                 {/* Product List */}
                 <div className="space-y-3">
-                  <h3 className="font-medium text-gray-400">Zu pickende Produkte:</h3>
-                  {selectedOrder.order_items.map(item => {
+                  <h3 className="font-medium text-gray-400">
+                    Zu pickende Produkte: ({selectedOrder.order_items.length})
+                  </h3>
+                  {selectedOrder.order_items.map((item, index) => {
                     const isPicked = pickedItems.has(item.id);
+                    const hasProduct = !!item.product;
                     
                     return (
                       <div
@@ -371,42 +452,56 @@ export default function MobilePickingPage() {
                           </div>
                           
                           <div className="flex-1">
-                            <h4 className={`font-semibold ${isPicked ? 'line-through' : ''}`}>
-                              {item.product?.name || `Produkt ID: ${item.product_id}`}
-                            </h4>
-                            {item.product ? (
+                            {hasProduct ? (
                               <>
+                                <h4 className={`font-semibold ${isPicked ? 'line-through' : ''}`}>
+                                  {item.product!.name}
+                                </h4>
                                 <p className="text-sm text-gray-400">
-                                  SKU: {item.product.sku}
+                                  SKU: {item.product!.sku}
                                 </p>
-                                {item.product.barcode && (
+                                {item.product!.barcode && (
                                   <p className="text-xs text-gray-500">
-                                    Barcode: {item.product.barcode}
+                                    Barcode: {item.product!.barcode}
                                   </p>
                                 )}
+                                <div className="flex items-center gap-4 mt-2">
+                                  <span className="text-sm">
+                                    Menge: <strong>{item.quantity}</strong>
+                                  </span>
+                                  {item.product!.storage_location && (
+                                    <div className="flex items-center gap-1 text-sm text-blue-400">
+                                      <MapPin className="h-4 w-4" />
+                                      {item.product!.storage_location}
+                                    </div>
+                                  )}
+                                </div>
                               </>
                             ) : (
-                              <p className="text-sm text-red-400">
-                                Produktdaten nicht gefunden
-                              </p>
-                            )}
-                            <div className="flex items-center gap-4 mt-2">
-                              <span className="text-sm">
-                                Menge: <strong>{item.quantity}</strong>
-                              </span>
-                              {item.product?.storage_location && (
-                                <div className="flex items-center gap-1 text-sm text-blue-400">
-                                  <MapPin className="h-4 w-4" />
-                                  {item.product.storage_location}
+                              <>
+                                <h4 className={`font-semibold text-red-400 ${isPicked ? 'line-through' : ''}`}>
+                                  Produkt #{index + 1} (Daten fehlen)
+                                </h4>
+                                <p className="text-sm text-gray-400">
+                                  Produkt ID: {item.product_id}
+                                </p>
+                                <p className="text-xs text-red-400">
+                                  <AlertCircle className="inline h-3 w-3 mr-1" />
+                                  Produktdaten konnten nicht geladen werden
+                                </p>
+                                <div className="mt-2">
+                                  <span className="text-sm">
+                                    Menge: <strong>{item.quantity}</strong>
+                                  </span>
                                 </div>
-                              )}
-                            </div>
+                              </>
+                            )}
                           </div>
 
-                          {item.product?.image_url && (
+                          {hasProduct && item.product!.image_url && (
                             <img
-                              src={item.product.image_url}
-                              alt={item.product.name}
+                              src={item.product!.image_url}
+                              alt={item.product!.name}
                               className="w-16 h-16 rounded object-cover"
                             />
                           )}
@@ -415,6 +510,14 @@ export default function MobilePickingPage() {
                     );
                   })}
                 </div>
+
+                {/* Debug Info */}
+                {selectedOrder.order_items.some(item => !item.product) && (
+                  <div className="bg-red-900 bg-opacity-30 rounded-lg p-3 text-sm">
+                    <AlertCircle className="inline h-4 w-4 mr-1" />
+                    Einige Produktdaten fehlen. Bitte Datenbank prüfen.
+                  </div>
+                )}
 
                 {/* Complete Button */}
                 {pickedItems.size === selectedOrder.order_items.length && (
