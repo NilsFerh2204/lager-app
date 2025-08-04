@@ -36,7 +36,7 @@ interface OrderItem {
   product_id: string;
   quantity: number;
   picked_quantity?: number;
-  product?: Product;
+  products?: Product; // Note: might be 'products' not 'product' in the response
 }
 
 interface Order {
@@ -78,7 +78,15 @@ export default function MobilePickingPage() {
             .from('order_items')
             .select(`
               *,
-              product:products(*)
+              products!product_id (
+                id,
+                name,
+                sku,
+                barcode,
+                storage_location,
+                current_stock,
+                image_url
+              )
             `)
             .eq('order_id', order.id);
 
@@ -86,6 +94,9 @@ export default function MobilePickingPage() {
             console.error('Error fetching items for order:', order.id, itemsError);
             return { ...order, order_items: [] };
           }
+
+          // Debug log to see the structure
+          console.log('Order items data:', itemsData);
 
           return { ...order, order_items: itemsData || [] };
         })
@@ -103,10 +114,11 @@ export default function MobilePickingPage() {
   const handleBarcodeInput = async () => {
     if (!scannedBarcode.trim() || !selectedOrder || !selectedOrder.order_items) return;
 
-    // Find item with this barcode
-    const item = selectedOrder.order_items.find(
-      item => item.product && item.product.barcode === scannedBarcode
-    );
+    // Find item with this barcode - check both 'product' and 'products' fields
+    const item = selectedOrder.order_items.find(item => {
+      const product = (item as any).product || (item as any).products;
+      return product && product.barcode === scannedBarcode;
+    });
 
     if (!item) {
       toast.error('Produkt nicht in dieser Bestellung');
@@ -122,7 +134,8 @@ export default function MobilePickingPage() {
 
     // Mark as picked
     setPickedItems(prev => new Set([...prev, item.id]));
-    toast.success(`✓ ${item.product?.name || 'Produkt'} gepickt`);
+    const product = (item as any).product || (item as any).products;
+    toast.success(`✓ ${product?.name || 'Produkt'} gepickt`);
     setScannedBarcode('');
 
     // Check if all items are picked
@@ -303,6 +316,8 @@ export default function MobilePickingPage() {
                   <h3 className="font-medium text-gray-400">Zu pickende Produkte:</h3>
                   {selectedOrder.order_items.map(item => {
                     const isPicked = pickedItems.has(item.id);
+                    // Try both 'product' and 'products' fields
+                    const product = (item as any).product || (item as any).products;
                     
                     return (
                       <div
@@ -324,33 +339,33 @@ export default function MobilePickingPage() {
                           
                           <div className="flex-1">
                             <h4 className={`font-semibold ${isPicked ? 'line-through' : ''}`}>
-                              {item.product?.name || 'Unbekanntes Produkt'}
+                              {product?.name || 'Unbekanntes Produkt'}
                             </h4>
                             <p className="text-sm text-gray-400">
-                              SKU: {item.product?.sku || 'N/A'}
+                              SKU: {product?.sku || 'N/A'}
                             </p>
-                            {item.product?.barcode && (
+                            {product?.barcode && (
                               <p className="text-xs text-gray-500">
-                                Barcode: {item.product.barcode}
+                                Barcode: {product.barcode}
                               </p>
                             )}
                             <div className="flex items-center gap-4 mt-2">
                               <span className="text-sm">
                                 Menge: <strong>{item.quantity}</strong>
                               </span>
-                              {item.product?.storage_location && (
+                              {product?.storage_location && (
                                 <div className="flex items-center gap-1 text-sm text-blue-400">
                                   <MapPin className="h-4 w-4" />
-                                  {item.product.storage_location}
+                                  {product.storage_location}
                                 </div>
                               )}
                             </div>
                           </div>
 
-                          {item.product?.image_url && (
+                          {product?.image_url && (
                             <img
-                              src={item.product.image_url}
-                              alt={item.product.name}
+                              src={product.image_url}
+                              alt={product.name}
                               className="w-16 h-16 rounded object-cover"
                             />
                           )}
