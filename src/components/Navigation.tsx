@@ -30,15 +30,9 @@ export default function Navigation() {
   const pathname = usePathname();
   const router = useRouter();
 
-  // Hide desktop navigation on mobile routes
-  if (pathname.startsWith('/mobile')) {
-    return null;
-  }
-
   const isActive = (path: string) => pathname === path;
 
   const handleLogout = () => {
-    // Add logout logic here
     router.push('/login');
   };
 

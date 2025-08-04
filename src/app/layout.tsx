@@ -1,33 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Toaster } from 'react-hot-toast';
-import Navigation from '@/components/Navigation';
+import ClientLayout from '@/components/ClientLayout';
 
 export const metadata: Metadata = {
   title: "Lagerverwaltung - Feuerwerk Management",
   description: "Professionelles Lagerverwaltungssystem für Feuerwerk",
-  manifest: "/manifest.json",
-  themeColor: "#ea580c",
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-    maximumScale: 1,
-    userScalable: false,
-  },
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "black-translucent",
-    title: "Lager App",
-  },
-  icons: {
-    icon: [
-      { url: "/icon-192x192.png", sizes: "192x192", type: "image/png" },
-      { url: "/icon-512x512.png", sizes: "512x512", type: "image/png" },
-    ],
-    apple: [
-      { url: "/icon-192x192.png", sizes: "192x192", type: "image/png" },
-    ],
-  },
 };
 
 export default function RootLayout({
@@ -43,12 +21,30 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <link rel="apple-touch-icon" href="/icon-192x192.png" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+        
+        <script dangerouslySetInnerHTML={{
+          __html: `
+            // Register service worker
+            if ('serviceWorker' in navigator && window.location.hostname !== 'localhost') {
+              window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js');
+              });
+            }
+            
+            // Redirect mobile users to mobile version
+            if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) && 
+                !window.location.pathname.startsWith('/mobile') &&
+                window.location.pathname !== '/') {
+              window.location.href = '/mobile';
+            }
+          `
+        }} />
       </head>
       <body className="antialiased bg-gray-50">
-        <Navigation />
-        <main className="min-h-screen">
+        <ClientLayout>
           {children}
-        </main>
+        </ClientLayout>
         <Toaster position="top-right" />
       </body>
     </html>
