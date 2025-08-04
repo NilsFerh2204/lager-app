@@ -1,25 +1,22 @@
-'use client';
-
-import { usePathname } from 'next/navigation';
 import type { Metadata } from "next";
 import { Toaster } from 'react-hot-toast';
 import MobileNavigation from '@/components/MobileNavigation';
 import "../globals.css";
+
+export const metadata: Metadata = {
+  title: "Lager App - Mobile",
+  description: "Mobile Lagerverwaltung",
+  viewport: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no",
+  themeColor: "#ea580c",
+};
 
 export default function MobileLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const pathname = usePathname();
-  
   return (
-    <div className="min-h-screen bg-gray-900" data-pathname={pathname}>
-      <style jsx global>{`
-        nav:not(.mobile-bottom-nav) {
-          display: none !important;
-        }
-      `}</style>
+    <div className="min-h-screen bg-gray-900">
       <MobileNavigation />
       <main className="pb-20">
         {children}

@@ -1,46 +1,53 @@
-import { NextResponse } from 'next/server'
-import type { NextRequest } from 'next/server'
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
 
 export function middleware(request: NextRequest) {
-  // Prüfe ob User eingeloggt ist (Cookie vorhanden)
-  const isAuthenticated = request.cookies.get('auth-token')
+  const { pathname } = request.nextUrl;
   
-  // Login-Seite immer erlauben
-  if (request.nextUrl.pathname === '/login') {
-    // Wenn bereits eingeloggt, redirect zu Dashboard
+  // Mobile routes should always be accessible
+  if (pathname.startsWith('/mobile')) {
+    return NextResponse.next();
+  }
+  
+  // Public routes that don't need authentication
+  const publicRoutes = ['/', '/login', '/api/auth/login'];
+  if (publicRoutes.includes(pathname)) {
+    return NextResponse.next();
+  }
+  
+  // Check if user is authenticated
+  const isAuthenticated = request.cookies.get('auth-token');
+  
+  // Login page
+  if (pathname === '/login') {
     if (isAuthenticated) {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+      return NextResponse.redirect(new URL('/(desktop)/dashboard', request.url));
     }
-    return NextResponse.next()
+    return NextResponse.next();
   }
   
-  // API routes für Login erlauben
-  if (request.nextUrl.pathname === '/api/auth/login') {
-    return NextResponse.next()
+  // Protected desktop routes
+  if (pathname.startsWith('/(desktop)') || pathname.startsWith('/dashboard')) {
+    if (!isAuthenticated) {
+      const loginUrl = new URL('/login', request.url);
+      loginUrl.searchParams.set('from', pathname);
+      return NextResponse.redirect(loginUrl);
+    }
   }
   
-  // Alle anderen Seiten brauchen Authentifizierung
-  if (!isAuthenticated) {
-    // Redirect zu Login
-    const loginUrl = new URL('/login', request.url)
-    loginUrl.searchParams.set('from', request.nextUrl.pathname)
-    return NextResponse.redirect(loginUrl)
-  }
-  
-  return NextResponse.next()
+  return NextResponse.next();
 }
 
-// Schütze alle Seiten außer Login und public assets
 export const config = {
   matcher: [
     /*
      * Match all request paths except for the ones starting with:
-     * - api/auth (auth API routes)
+     * - api (API routes)
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
-     * - public folder
+     * - public assets
      */
-    '/((?!api/auth|_next/static|_next/image|favicon.ico).*)',
+    '/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
-}
+};
