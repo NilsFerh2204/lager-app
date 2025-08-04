@@ -57,7 +57,7 @@ export default function Navigation() {
     return null;
   }
 
-  const isActive = (path: string) => pathname === path;
+  const isActive = (path: string) => pathname === path || pathname === `/(desktop)${path}`;
 
   const handleLogout = () => {
     router.push('/login');
@@ -81,7 +81,7 @@ export default function Navigation() {
             {/* Desktop Navigation */}
             <div className="hidden md:flex items-center space-x-1 ml-6">
               <Link
-                href="/dashboard"
+                href="/(desktop)/dashboard"
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive('/dashboard') 
                     ? 'bg-orange-100 text-orange-700' 
@@ -92,7 +92,7 @@ export default function Navigation() {
                 Dashboard
               </Link>
               <Link
-                href="/products"
+                href="/(desktop)/products"
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive('/products') 
                     ? 'bg-orange-100 text-orange-700' 
@@ -103,7 +103,7 @@ export default function Navigation() {
                 Produkte
               </Link>
               <Link
-                href="/orders"
+                href="/(desktop)/orders"
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive('/orders') 
                     ? 'bg-orange-100 text-orange-700' 
@@ -114,7 +114,7 @@ export default function Navigation() {
                 Bestellungen
               </Link>
               <Link
-                href="/storage-locations"
+                href="/(desktop)/storage-locations"
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive('/storage-locations') 
                     ? 'bg-orange-100 text-orange-700' 
@@ -125,7 +125,7 @@ export default function Navigation() {
                 Lagerplätze
               </Link>
               <Link
-                href="/order-picking"
+                href="/(desktop)/order-picking"
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive('/order-picking') 
                     ? 'bg-orange-100 text-orange-700' 
@@ -136,7 +136,7 @@ export default function Navigation() {
                 Kommissionierung
               </Link>
               <Link
-                href="/bulk-edit"
+                href="/(desktop)/bulk-edit"
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive('/bulk-edit') 
                     ? 'bg-orange-100 text-orange-700' 
@@ -147,7 +147,7 @@ export default function Navigation() {
                 Bulk Edit
               </Link>
               <Link
-                href="/shopify-sync"
+                href="/(desktop)/shopify-sync"
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive('/shopify-sync') 
                     ? 'bg-orange-100 text-orange-700' 
@@ -208,14 +208,14 @@ export default function Navigation() {
                       <p className="text-xs text-gray-500">admin@lager.de</p>
                     </div>
                     <Link
-                      href="/profile"
+                      href="/(desktop)/profile"
                       className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                     >
                       <User className="inline h-4 w-4 mr-2" />
                       Profil
                     </Link>
                     <Link
-                      href="/settings"
+                      href="/(desktop)/settings"
                       className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                     >
                       <Settings className="inline h-4 w-4 mr-2" />
@@ -251,7 +251,7 @@ export default function Navigation() {
         <div className="md:hidden bg-white border-t">
           <div className="px-2 pt-2 pb-3 space-y-1">
             <Link
-              href="/dashboard"
+              href="/(desktop)/dashboard"
               className="block px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
               onClick={() => setMobileMenuOpen(false)}
             >
@@ -259,7 +259,7 @@ export default function Navigation() {
               Dashboard
             </Link>
             <Link
-              href="/products"
+              href="/(desktop)/products"
               className="block px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
               onClick={() => setMobileMenuOpen(false)}
             >
@@ -267,7 +267,7 @@ export default function Navigation() {
               Produkte
             </Link>
             <Link
-              href="/orders"
+              href="/(desktop)/orders"
               className="block px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
               onClick={() => setMobileMenuOpen(false)}
             >
@@ -275,7 +275,7 @@ export default function Navigation() {
               Bestellungen
             </Link>
             <Link
-              href="/storage-locations"
+              href="/(desktop)/storage-locations"
               className="block px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
               onClick={() => setMobileMenuOpen(false)}
             >

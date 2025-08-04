@@ -73,3 +73,19 @@ a {
 body:has([data-mobile-page="true"]) nav {
   display: none !important;
 }
+/* Force hide all navigation on mobile */
+@media (max-width: 767px) {
+  nav {
+    display: none !important;
+  }
+  
+  /* Hide navigation in mobile paths */
+  body:has([class*="mobile"]) nav {
+    display: none !important;
+  }
+}
+
+/* Hide navigation on all /mobile routes */
+[data-pathname*="/mobile"] nav {
+  display: none !important;
+}

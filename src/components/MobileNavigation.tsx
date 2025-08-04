@@ -18,7 +18,7 @@ export default function MobileNavigation() {
   return (
     <>
       {/* Bottom Navigation Only - No Header */}
-      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm z-40">
+      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm z-40 mobile-bottom-nav">
         <div className="grid grid-cols-4 py-2">
           <Link 
             href="/mobile" 
@@ -48,13 +48,13 @@ export default function MobileNavigation() {
             <span className="text-xs">Picken</span>
           </Link>
           <Link 
-            href="/mobile/locations" 
+            href="/mobile/products" 
             className={`flex flex-col items-center gap-1 py-2 ${
-              isActive('/mobile/locations') ? 'text-orange-500' : 'text-gray-400'
+              isActive('/mobile/products') ? 'text-orange-500' : 'text-gray-400'
             }`}
           >
-            <MapPin className="h-6 w-6" />
-            <span className="text-xs">Plätze</span>
+            <Package className="h-6 w-6" />
+            <span className="text-xs">Produkte</span>
           </Link>
         </div>
       </div>
