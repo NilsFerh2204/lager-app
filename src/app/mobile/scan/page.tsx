@@ -20,7 +20,7 @@ import {
   Scan
 } from 'lucide-react';
 import Link from 'next/link';
-import { BrowserMultiFormatReader, DecodeHintType } from '@zxing/library';
+import { BrowserMultiFormatReader } from '@zxing/library';
 import toast from 'react-hot-toast';
 
 interface Product {
@@ -48,9 +48,7 @@ export default function MobileScannerPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const lastScannedRef = useRef<string>('');
-  const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const controlsRef = useRef<any>(null);
 
   useEffect(() => {
     return () => {
@@ -61,49 +59,32 @@ export default function MobileScannerPage() {
   const startCamera = async () => {
     try {
       setShowCamera(true);
-      setIsScanning(true);
       setScanStatus('Kamera wird gestartet...');
       
-      // Request camera with better constraints
-      const constraints = {
-        video: { 
-          facingMode: { ideal: 'environment' },
-          width: { min: 640, ideal: 1280, max: 1920 },
-          height: { min: 480, ideal: 720, max: 1080 },
-          aspectRatio: { ideal: 16/9 }
-        },
-        audio: false
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
+      // Stop any existing camera
+      stopCamera();
       
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.setAttribute('webkit-playsinline', 'true');
-        
-        await new Promise((resolve) => {
-          videoRef.current!.onloadedmetadata = resolve;
-        });
-        
-        await videoRef.current.play();
-        setScanStatus('Bereit zum Scannen...');
-        
-        // Initialize barcode reader with hints for better performance
-        if (!readerRef.current) {
-          const hints = new Map();
-          hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-            'EAN_13', 'EAN_8', 'CODE_128', 'CODE_39', 'UPC_A', 'UPC_E', 'QR_CODE'
-          ]);
-          hints.set(DecodeHintType.TRY_HARDER, true);
-          
-          readerRef.current = new BrowserMultiFormatReader(hints);
+      // Initialize reader
+      readerRef.current = new BrowserMultiFormatReader();
+      
+      // Start decoding from camera
+      controlsRef.current = await readerRef.current.decodeFromVideoDevice(
+        undefined, // use default camera
+        videoRef.current,
+        (result, error) => {
+          if (result) {
+            console.log('Barcode detected:', result.getText());
+            handleBarcodeDetected(result.getText());
+          }
+          if (error && error.message && !error.message.includes('NotFoundException')) {
+            console.error('Scan error:', error);
+          }
         }
-
-        // Start continuous scanning with canvas
-        startContinuousScanning();
-      }
+      );
+      
+      setIsScanning(true);
+      setScanStatus('Barcode in den Rahmen halten...');
+      
     } catch (error) {
       console.error('Camera error:', error);
       toast.error('Kamera konnte nicht gestartet werden');
@@ -113,97 +94,47 @@ export default function MobileScannerPage() {
     }
   };
 
-  const startContinuousScanning = () => {
-    const scanLoop = async () => {
-      if (!videoRef.current || !canvasRef.current || !readerRef.current || !isScanning) {
-        return;
-      }
-
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-
-      if (!ctx || video.readyState !== video.HAVE_ENOUGH_DATA) {
-        requestAnimationFrame(scanLoop);
-        return;
-      }
-
-      // Set canvas size to match video
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      // Draw current frame to canvas
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      try {
-        // Try to decode from canvas
-        const result = await readerRef.current.decodeFromCanvas(canvas);
-        
-        if (result) {
-          const code = result.getText();
-          
-          // Prevent duplicate scans
-          if (code !== lastScannedRef.current) {
-            lastScannedRef.current = code;
-            setScanStatus('Barcode erkannt!');
-            handleBarcodeDetected(code);
-            return; // Stop scanning after detection
-          }
-        }
-      } catch (err) {
-        // No barcode found, continue scanning
-        setScanStatus('Barcode in den Rahmen halten...');
-      }
-
-      // Continue scanning
-      if (isScanning) {
-        requestAnimationFrame(scanLoop);
-      }
-    };
-
-    // Start the scan loop
-    requestAnimationFrame(scanLoop);
-  };
-
   const stopCamera = () => {
-    setIsScanning(false);
-
-    // Clear any timeouts
-    if (scanTimeoutRef.current) {
-      clearTimeout(scanTimeoutRef.current);
-      scanTimeoutRef.current = null;
+    try {
+      // Stop the reader controls
+      if (controlsRef.current) {
+        controlsRef.current.stop();
+        controlsRef.current = null;
+      }
+      
+      // Reset the reader
+      if (readerRef.current) {
+        readerRef.current.reset();
+        readerRef.current = null;
+      }
+      
+      // Clear video
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      
+      setShowCamera(false);
+      setIsScanning(false);
+      setScanStatus('');
+    } catch (error) {
+      console.error('Error stopping camera:', error);
     }
-
-    // Stop video stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-
-    // Reset reader
-    if (readerRef.current) {
-      readerRef.current.reset();
-    }
-
-    setShowCamera(false);
-    setScanStatus('');
-    lastScannedRef.current = '';
   };
 
   const handleBarcodeDetected = async (code: string) => {
+    // Prevent multiple scans
+    if (!isScanning) return;
+    
+    setIsScanning(false);
+    
     // Vibration feedback
     if (navigator.vibrate) {
       navigator.vibrate([200, 100, 200]);
     }
     
-    // Show success animation
     setScanStatus('✓ Barcode erfolgreich gescannt!');
     
-    // Wait a moment before closing camera
+    // Stop camera and process barcode
     setTimeout(() => {
       stopCamera();
       setManualBarcode(code);
@@ -372,7 +303,8 @@ export default function MobileScannerPage() {
                 </button>
                 <button
                   onClick={startCamera}
-                  className="px-4 py-3 bg-orange-600 rounded-lg"
+                  disabled={showCamera}
+                  className="px-4 py-3 bg-orange-600 rounded-lg disabled:bg-gray-600"
                 >
                   <Camera className="h-6 w-6" />
                 </button>
@@ -388,18 +320,10 @@ export default function MobileScannerPage() {
                 <video
                   ref={videoRef}
                   className="w-full aspect-video object-cover"
-                  playsInline
-                  muted
-                  autoPlay
+                  style={{ maxHeight: '400px' }}
                 />
                 
-                {/* Hidden canvas for processing */}
-                <canvas
-                  ref={canvasRef}
-                  className="hidden"
-                />
-                
-                {/* Scan Frame with Animation */}
+                {/* Scan Frame */}
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <div className="relative">
                     <div className="w-64 h-32 border-2 border-orange-500 rounded-lg">
@@ -412,7 +336,13 @@ export default function MobileScannerPage() {
                     {/* Scan Line Animation */}
                     {isScanning && (
                       <div className="absolute inset-0 overflow-hidden">
-                        <div className="h-0.5 bg-orange-500 absolute w-full animate-scan" />
+                        <div className="h-0.5 bg-orange-500 absolute w-full animate-pulse" 
+                             style={{
+                               top: '50%',
+                               transform: 'translateY(-50%)',
+                               boxShadow: '0 0 8px rgba(251, 146, 60, 0.8)'
+                             }}
+                        />
                       </div>
                     )}
                   </div>
@@ -429,7 +359,7 @@ export default function MobileScannerPage() {
                 {/* Close Button */}
                 <button
                   onClick={stopCamera}
-                  className="absolute top-4 right-4 p-2 bg-red-600 rounded-full"
+                  className="absolute top-4 right-4 p-2 bg-red-600 rounded-full hover:bg-red-700"
                 >
                   <CameraOff className="h-5 w-5" />
                 </button>
@@ -639,18 +569,6 @@ export default function MobileScannerPage() {
           </div>
         )}
       </div>
-
-      {/* Add scan animation to global styles */}
-      <style jsx>{`
-        @keyframes scan {
-          0% { top: 0; }
-          50% { top: calc(100% - 2px); }
-          100% { top: 0; }
-        }
-        .animate-scan {
-          animation: scan 2s ease-in-out infinite;
-        }
-      `}</style>
 
       {/* Bottom Navigation */}
       <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm z-40 mobile-bottom-nav">
