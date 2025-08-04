@@ -62,3 +62,14 @@ a {
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
+/* Force hide navigation on mobile pages */
+@media (max-width: 768px) {
+  nav {
+    display: none !important;
+  }
+}
+
+/* Specific mobile page hiding */
+body:has([data-mobile-page="true"]) nav {
+  display: none !important;
+}

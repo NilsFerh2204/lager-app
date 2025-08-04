@@ -88,8 +88,9 @@ export default function MobileHomePage() {
   const currentHour = new Date().getHours();
   const greeting = currentHour < 12 ? 'Guten Morgen' : currentHour < 18 ? 'Guten Tag' : 'Guten Abend';
 
-  return (
-    <div className="min-h-screen bg-gray-900 text-white pb-20">
+ return (
+  <div className="min-h-screen bg-gray-900 text-white pb-20" data-mobile-page="true">
+    {/* Rest des Codes bleibt gleich */}
       {/* Header */}
       <div className="bg-gradient-to-r from-orange-600 to-red-600 p-6 pb-12">
         <div className="flex items-center justify-between mb-4">
