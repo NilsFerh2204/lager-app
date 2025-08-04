@@ -10,8 +10,6 @@ import {
   Minus,
   MapPin,
   ArrowLeft,
-  Flashlight,
-  SwitchCamera,
   Search,
   Check,
   AlertCircle,
@@ -20,11 +18,11 @@ import {
   ShoppingCart,
   ClipboardList,
   QrCode,
-  Smartphone,
-  Database
+  Database,
+  CameraOff
 } from 'lucide-react';
 import Link from 'next/link';
-import { BrowserMultiFormatReader, IScannerControls } from '@zxing/library';
+import { BrowserMultiFormatReader } from '@zxing/library';
 import toast from 'react-hot-toast';
 
 interface Product {
@@ -37,186 +35,105 @@ interface Product {
 }
 
 export default function MobileScannerPage() {
-  const [scanning, setScanning] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
   const [scannedCode, setScannedCode] = useState('');
   const [product, setProduct] = useState<Product | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [adjustmentType, setAdjustmentType] = useState<'add' | 'remove' | 'set'>('add');
-  const [flashOn, setFlashOn] = useState(false);
-  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [loading, setLoading] = useState(false);
   const [manualMode, setManualMode] = useState(false);
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
-  const [isIOS, setIsIOS] = useState(false);
-  const [showInstructions, setShowInstructions] = useState(false);
+  const [stream, setStream] = useState<MediaStream | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const scannerRef = useRef<IScannerControls | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
 
   useEffect(() => {
-    // Detect iOS
-    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
-    setIsIOS(iOS);
-    
-    // Check if camera permissions are already granted
-    checkCameraPermission();
+    // Cleanup on unmount
+    return () => {
+      stopCamera();
+    };
   }, []);
 
-  const checkCameraPermission = async () => {
+  const startCamera = async () => {
     try {
-      const result = await navigator.permissions.query({ name: 'camera' as PermissionName });
-      setHasPermission(result.state === 'granted');
-      
-      if (result.state === 'prompt') {
-        setShowInstructions(true);
-      }
-    } catch (error) {
-      // iOS doesn't support permissions API, we'll try to request camera access
-      console.log('Permissions API not supported');
-    }
-  };
-
-  const requestCameraPermission = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } 
-      });
-      
-      // Permission granted, stop the stream
-      stream.getTracks().forEach(track => track.stop());
-      setHasPermission(true);
-      setShowInstructions(false);
-      return true;
-    } catch (error) {
-      console.error('Camera permission denied:', error);
-      setHasPermission(false);
-      toast.error('Kamera-Zugriff verweigert. Bitte erlauben Sie den Zugriff in den Einstellungen.');
-      return false;
-    }
-  };
-
-  const startScanning = async () => {
-    // First check/request permission
-    if (hasPermission === false || hasPermission === null) {
-      const granted = await requestCameraPermission();
-      if (!granted) return;
-    }
-
-    try {
-      setScanning(true);
-      if (!readerRef.current) {
-        readerRef.current = new BrowserMultiFormatReader();
-      }
-
-      // Explizit Rückkamera anfordern
-      const constraints = {
+      // Request rear camera specifically
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: { exact: "environment" }, // Rückkamera erzwingen
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      };
+          facingMode: 'environment', // This should use rear camera
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
 
-      // Direkt Stream anfordern
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      setStream(mediaStream);
       
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+        videoRef.current.srcObject = mediaStream;
         
-        // Scanner auf diesem Stream starten
-        scannerRef.current = await readerRef.current.decodeFromVideoElement(
-          videoRef.current,
-          (result, error) => {
+        // Start scanning
+        if (!readerRef.current) {
+          readerRef.current = new BrowserMultiFormatReader();
+        }
+
+        // Scan continuously
+        const scanInterval = setInterval(async () => {
+          if (!videoRef.current || !isScanning) {
+            clearInterval(scanInterval);
+            return;
+          }
+
+          try {
+            const result = await readerRef.current.decodeOnceFromVideoElement(videoRef.current);
             if (result) {
               const code = result.getText();
-              handleScan(code);
-              
-              if (navigator.vibrate) {
-                navigator.vibrate(200);
-              }
+              handleBarcodeDetected(code);
+              clearInterval(scanInterval);
             }
+          } catch (err) {
+            // No barcode found, continue scanning
           }
-        );
+        }, 500); // Scan every 500ms
 
-        // Apply torch if supported
-        if (flashOn) {
-          const track = stream.getVideoTracks()[0];
-          if (track.getCapabilities && 'torch' in track.getCapabilities()) {
-            await track.applyConstraints({
-              // @ts-ignore
-              advanced: [{ torch: flashOn }]
-            });
-          }
-        }
+        setIsScanning(true);
       }
-    } catch (error: any) {
-      console.error('Exact environment camera error:', error);
-      
-      // Falls exact environment nicht funktioniert, normale Rückkamera
-      try {
-        const fallbackStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" }
-        });
-        
-        if (videoRef.current) {
-          videoRef.current.srcObject = fallbackStream;
-          
-          // Scanner mit Fallback starten
-          scannerRef.current = await readerRef.current!.decodeFromVideoElement(
-            videoRef.current,
-            (result, error) => {
-              if (result) {
-                const code = result.getText();
-                handleScan(code);
-                
-                if (navigator.vibrate) {
-                  navigator.vibrate(200);
-                }
-              }
-            }
-          );
-        }
-      } catch (fallbackError: any) {
-        console.error('Kamera-Fehler:', fallbackError);
-        setScanning(false);
-        
-        if (fallbackError.name === 'NotAllowedError') {
-          setHasPermission(false);
-          toast.error('Kamera-Zugriff verweigert. Bitte erlauben Sie den Zugriff.');
-        } else {
-          toast.error('Kamera konnte nicht gestartet werden');
-        }
-      }
+    } catch (error) {
+      console.error('Camera error:', error);
+      toast.error('Kamera konnte nicht gestartet werden');
+      setIsScanning(false);
     }
   };
 
-  const stopScanning = () => {
-    if (scannerRef.current) {
-      scannerRef.current.stop();
-      scannerRef.current = null;
+  const stopCamera = () => {
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
     }
     
-    // Stop video stream
-    if (videoRef.current?.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
+    if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
     
-    setScanning(false);
+    setIsScanning(false);
   };
 
-  const handleScan = async (code: string) => {
+  const handleBarcodeDetected = async (code: string) => {
+    // Stop camera immediately
+    stopCamera();
+    
+    // Vibration feedback
+    if (navigator.vibrate) {
+      navigator.vibrate(200);
+    }
+    
     setScannedCode(code);
-    stopScanning();
     await searchProduct(code);
   };
 
   const searchProduct = async (searchTerm: string) => {
     setLoading(true);
     try {
-      // Erst nach Produkt mit Barcode suchen
+      // Search for product by barcode or SKU
       const { data, error } = await supabase
         .from('products')
         .select('*')
@@ -224,8 +141,8 @@ export default function MobileScannerPage() {
         .single();
 
       if (error || !data) {
-        // Produkt nicht gefunden - als unbekannten Barcode speichern
-        const { error: insertError } = await supabase
+        // Unknown barcode - save it
+        await supabase
           .from('unknown_barcodes')
           .upsert({
             barcode: searchTerm,
@@ -235,24 +152,19 @@ export default function MobileScannerPage() {
             onConflict: 'barcode'
           });
 
-        // Scan count erhöhen wenn bereits existiert
-        if (insertError?.code === '23505') { // Duplicate key
-          await supabase.rpc('increment_scan_count', { 
-            barcode_param: searchTerm 
-          });
-        }
-
-        toast.error('Unbekannter Barcode! Bitte zuordnen.');
-        
-        // Option zum Zuordnen anbieten
-        if (confirm('Möchten Sie diesen Barcode jetzt einem Produkt zuordnen?')) {
-          window.location.href = `/mobile/barcode-learning?barcode=${searchTerm}`;
-        }
+        toast.error(
+          <div>
+            <p>Unbekannter Barcode!</p>
+            <Link href={`/mobile/barcode-learning?barcode=${searchTerm}`} className="underline">
+              Jetzt zuordnen →
+            </Link>
+          </div>
+        );
         
         setProduct(null);
       } else {
         setProduct(data);
-        toast.success(`Produkt gefunden: ${data.name}`);
+        toast.success(`Gefunden: ${data.name}`);
       }
     } catch (error) {
       console.error('Search error:', error);
@@ -299,30 +211,12 @@ export default function MobileScannerPage() {
 
       if (error) throw error;
 
-      // Log inventory adjustment
-      await supabase
-        .from('inventory_adjustments')
-        .insert({
-          product_id: product.id,
-          old_quantity: product.current_stock,
-          new_quantity: newStock,
-          difference: newStock - product.current_stock,
-          reason: adjustmentType === 'add' ? 'Wareneingang' : adjustmentType === 'remove' ? 'Entnahme' : 'Inventur',
-          adjusted_by: 'Mobile Scanner'
-        });
-
       toast.success(`Bestand aktualisiert: ${newStock} Stück`);
-      setProduct({ ...product, current_stock: newStock });
       
       // Reset for next scan
-      setTimeout(() => {
-        setProduct(null);
-        setScannedCode('');
-        setQuantity(1);
-        if (!manualMode) {
-          startScanning();
-        }
-      }, 2000);
+      setProduct(null);
+      setScannedCode('');
+      setQuantity(1);
     } catch (error) {
       console.error('Stock adjustment error:', error);
       toast.error('Fehler beim Aktualisieren');
@@ -331,35 +225,10 @@ export default function MobileScannerPage() {
     }
   };
 
-  const toggleFlash = async () => {
-    if (videoRef.current?.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      const track = stream.getVideoTracks()[0];
-      
-      if (track.getCapabilities && 'torch' in track.getCapabilities()) {
-        const newFlashState = !flashOn;
-        try {
-          await track.applyConstraints({
-            // @ts-ignore
-            advanced: [{ torch: newFlashState }]
-          });
-          setFlashOn(newFlashState);
-        } catch (error) {
-          console.error('Flash toggle error:', error);
-          toast.error('Taschenlampe nicht verfügbar');
-        }
-      } else {
-        toast.error('Taschenlampe nicht verfügbar');
-      }
-    }
-  };
-
-  const switchCamera = async () => {
-    stopScanning();
-    setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
-    setTimeout(() => {
-      startScanning();
-    }, 100);
+  const resetScanner = () => {
+    setProduct(null);
+    setScannedCode('');
+    setQuantity(1);
   };
 
   return (
@@ -385,127 +254,88 @@ export default function MobileScannerPage() {
 
       {/* Main Content */}
       <div className="pt-20 p-4">
-        {/* iOS Instructions */}
-        {isIOS && showInstructions && (
-          <div className="bg-blue-900 bg-opacity-50 rounded-lg p-4 mb-4">
-            <div className="flex items-start gap-3">
-              <Smartphone className="h-6 w-6 text-blue-400 flex-shrink-0 mt-1" />
-              <div>
-                <h3 className="font-semibold mb-1">iOS Kamera-Zugriff</h3>
-                <p className="text-sm text-gray-300 mb-2">
-                  Für den Scanner benötigt die App Zugriff auf Ihre Kamera.
-                </p>
-                <p className="text-sm text-gray-400">
-                  Falls Sie gefragt werden, tippen Sie auf "Erlauben".
-                </p>
+        {!product && (
+          <>
+            {!manualMode ? (
+              /* Camera Scanner */
+              <div className="space-y-4">
+                {!isScanning ? (
+                  <button
+                    onClick={startCamera}
+                    className="w-full py-4 rounded-lg font-semibold text-lg flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700"
+                  >
+                    <Camera className="h-6 w-6" />
+                    Kamera starten
+                  </button>
+                ) : (
+                  <div className="relative rounded-lg overflow-hidden bg-black">
+                    <video
+                      ref={videoRef}
+                      className="w-full aspect-video object-cover"
+                      autoPlay
+                      playsInline
+                      muted
+                    />
+                    
+                    {/* Scan frame overlay */}
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div className="w-64 h-64 border-2 border-orange-500 rounded-lg">
+                        <div className="w-full h-full border-8 border-transparent animate-pulse" />
+                      </div>
+                    </div>
+                    
+                    {/* Stop button */}
+                    <button
+                      onClick={stopCamera}
+                      className="absolute bottom-4 left-1/2 transform -translate-x-1/2 px-6 py-3 bg-red-600 rounded-full flex items-center gap-2"
+                    >
+                      <CameraOff className="h-5 w-5" />
+                      Kamera stoppen
+                    </button>
+                  </div>
+                )}
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Permission Denied Message */}
-        {hasPermission === false && (
-          <div className="bg-red-900 bg-opacity-50 rounded-lg p-4 mb-4">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="h-6 w-6 text-red-400 flex-shrink-0 mt-1" />
-              <div>
-                <h3 className="font-semibold mb-1">Kamera-Zugriff verweigert</h3>
-                <p className="text-sm text-gray-300 mb-2">
-                  Bitte erlauben Sie den Kamera-Zugriff in den Einstellungen:
-                </p>
-                <ol className="text-sm text-gray-400 list-decimal list-inside">
-                  <li>Öffnen Sie die iOS Einstellungen</li>
-                  <li>Safari → Kamera → Erlauben</li>
-                  <li>Laden Sie diese Seite neu</li>
-                </ol>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {!manualMode ? (
-          /* Camera Scanner */
-          <div className="space-y-4">
-            {!scanning && !product && (
-              <button
-                onClick={startScanning}
-                disabled={hasPermission === false}
-                className={`w-full py-4 rounded-lg font-semibold text-lg flex items-center justify-center gap-2 ${
-                  hasPermission === false 
-                    ? 'bg-gray-700 text-gray-400' 
-                    : 'bg-orange-600 hover:bg-orange-700'
-                }`}
-              >
-                <Camera className="h-6 w-6" />
-                Scanner starten
-              </button>
-            )}
-
-            {scanning && (
-              <div className="relative rounded-lg overflow-hidden bg-black">
-                <video
-                  ref={videoRef}
-                  className="w-full aspect-[4/3] object-cover"
-                  autoPlay
-                  playsInline
-                />
-                <div className="absolute inset-0 border-2 border-orange-500 m-8 rounded-lg pointer-events-none" />
-                
-                {/* Scanner Controls */}
-                <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4">
-                  <button
-                    onClick={toggleFlash}
-                    className="p-3 bg-gray-800 bg-opacity-80 rounded-full"
-                  >
-                    <Flashlight className={`h-6 w-6 ${flashOn ? 'text-yellow-400' : 'text-gray-400'}`} />
-                  </button>
-                  <button
-                    onClick={stopScanning}
-                    className="p-3 bg-red-600 rounded-full"
-                  >
-                    <X className="h-6 w-6" />
-                  </button>
-                  <button
-                    onClick={switchCamera}
-                    className="p-3 bg-gray-800 bg-opacity-80 rounded-full"
-                  >
-                    <SwitchCamera className="h-6 w-6 text-gray-400" />
-                  </button>
+            ) : (
+              /* Manual Input */
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Barcode / SKU eingeben
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={scannedCode}
+                      onChange={(e) => setScannedCode(e.target.value)}
+                      placeholder="z.B. 123456789"
+                      className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-lg"
+                      autoFocus
+                    />
+                    <button
+                      onClick={handleManualSearch}
+                      disabled={loading || !scannedCode}
+                      className="px-4 py-3 bg-orange-600 rounded-lg disabled:bg-gray-700"
+                    >
+                      <Search className="h-6 w-6" />
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
-          </div>
-        ) : (
-          /* Manual Input */
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Barcode / SKU eingeben
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={scannedCode}
-                  onChange={(e) => setScannedCode(e.target.value)}
-                  placeholder="z.B. 123456789"
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-lg"
-                  autoFocus
-                />
-                <button
-                  onClick={handleManualSearch}
-                  disabled={loading || !scannedCode}
-                  className="px-4 py-3 bg-orange-600 rounded-lg"
-                >
-                  <Search className="h-6 w-6" />
-                </button>
+
+            {/* Last scanned code */}
+            {scannedCode && !product && !loading && (
+              <div className="mt-4 p-3 bg-gray-800 rounded-lg">
+                <p className="text-sm text-gray-400">Gescannter Code:</p>
+                <p className="font-mono text-lg">{scannedCode}</p>
               </div>
-            </div>
-          </div>
+            )}
+          </>
         )}
 
         {/* Product Result */}
         {product && (
-          <div className="mt-6 space-y-4">
+          <div className="space-y-4">
             <div className="bg-gray-800 rounded-lg p-4">
               <div className="flex items-start gap-4">
                 {product.image_url && (
@@ -607,11 +437,7 @@ export default function MobileScannerPage() {
               {/* Action Buttons */}
               <div className="grid grid-cols-2 gap-3">
                 <button
-                  onClick={() => {
-                    setProduct(null);
-                    setScannedCode('');
-                    if (!manualMode) startScanning();
-                  }}
+                  onClick={resetScanner}
                   className="py-3 bg-gray-700 rounded-lg font-semibold"
                 >
                   Abbrechen
@@ -632,11 +458,22 @@ export default function MobileScannerPage() {
                 </button>
               </div>
             </div>
+
+            {/* Scan next button */}
+            <button
+              onClick={() => {
+                resetScanner();
+                if (!manualMode) startCamera();
+              }}
+              className="w-full py-3 bg-gray-700 rounded-lg font-medium"
+            >
+              Nächstes Produkt scannen
+            </button>
           </div>
         )}
 
         {/* Quick Actions */}
-        {!scanning && !product && (
+        {!isScanning && !product && (
           <div className="mt-8 grid grid-cols-2 gap-4">
             <Link
               href="/mobile/inventory"
