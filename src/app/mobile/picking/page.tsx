@@ -2,76 +2,56 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import Link from 'next/link';
 import {
+  ShoppingCart,
   Package,
   MapPin,
   Check,
-  Clock,
-  User,
-  ChevronRight,
-  ArrowLeft,
-  QrCode,
-  AlertCircle,
-  CheckCircle,
-  Loader2,
-  ShoppingCart,
-  Filter,
   X,
+  ChevronRight,
+  Clock,
+  AlertCircle,
   Home,
-  ChevronLeft
+  QrCode,
+  Loader2,
+  CheckCircle,
+  Camera
 } from 'lucide-react';
-import Link from 'next/link';
 import toast from 'react-hot-toast';
-
-interface Order {
-  id: string;
-  shopify_id: string;
-  order_number: string;
-  customer_name: string;
-  customer_email: string;
-  shipping_address: string;
-  shipping_city: string;
-  shipping_zip: string;
-  total_price: number;
-  fulfillment_status: string;
-  financial_status: string;
-  note: string | null;
-  shopify_created_at: string;
-  order_items: OrderItem[];
-}
 
 interface OrderItem {
   id: string;
-  order_id: string;
-  product_id: string | null;
-  shopify_product_id: string;
-  shopify_variant_id: string;
-  title: string;
-  variant_title: string | null;
-  sku: string;
+  product_id: string;
   quantity: number;
-  price: number;
-  product?: {
+  picked_quantity?: number;
+  product: {
+    id: string;
+    name: string;
+    sku: string;
+    barcode: string | null;
     storage_location: string | null;
     current_stock: number;
     image_url: string | null;
   };
 }
 
-interface PickingSession {
-  orders: Order[];
-  currentOrderIndex: number;
-  pickedItems: Set<string>;
-  startTime: Date;
+interface Order {
+  id: string;
+  order_number: string;
+  customer_name: string;
+  status: string;
+  created_at: string;
+  items: OrderItem[];
 }
 
 export default function MobilePickingPage() {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeSession, setActiveSession] = useState<PickingSession | null>(null);
-  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
-  const [showFilters, setShowFilters] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<'all' | 'unfulfilled' | 'fulfilled'>('unfulfilled');
+  const [scanMode, setScanMode] = useState(false);
+  const [scannedBarcode, setScannedBarcode] = useState('');
+  const [pickedItems, setPickedItems] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchOrders();
@@ -83,20 +63,17 @@ export default function MobilePickingPage() {
         .from('orders')
         .select(`
           *,
-          order_items (
+          items:order_items(
             *,
-            product:product_id (
-              storage_location,
-              current_stock,
-              image_url
-            )
+            product:products(*)
           )
         `)
-        .order('shopify_created_at', { ascending: true });
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true });
 
       if (error) throw error;
       setOrders(data || []);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error fetching orders:', error);
       toast.error('Fehler beim Laden der Bestellungen');
     } finally {
@@ -104,406 +81,284 @@ export default function MobilePickingPage() {
     }
   };
 
-  const startPicking = () => {
-    if (selectedOrders.size === 0) {
-      toast.error('Bitte Bestellungen auswählen');
+  const handleBarcodeInput = async () => {
+    if (!scannedBarcode.trim() || !selectedOrder) return;
+
+    // Find item with this barcode
+    const item = selectedOrder.items.find(
+      item => item.product.barcode === scannedBarcode
+    );
+
+    if (!item) {
+      toast.error('Produkt nicht in dieser Bestellung');
+      setScannedBarcode('');
       return;
     }
 
-    const selectedOrdersList = orders.filter(o => selectedOrders.has(o.id));
-    setActiveSession({
-      orders: selectedOrdersList,
-      currentOrderIndex: 0,
-      pickedItems: new Set(),
-      startTime: new Date()
-    });
-  };
-
-  const toggleItemPicked = (itemId: string) => {
-    if (!activeSession) return;
-
-    const newPickedItems = new Set(activeSession.pickedItems);
-    if (newPickedItems.has(itemId)) {
-      newPickedItems.delete(itemId);
-    } else {
-      newPickedItems.add(itemId);
-      // Vibration feedback
-      if (navigator.vibrate) {
-        navigator.vibrate(100);
-      }
+    if (pickedItems.has(item.id)) {
+      toast.info('Produkt bereits gepickt');
+      setScannedBarcode('');
+      return;
     }
 
-    setActiveSession({
-      ...activeSession,
-      pickedItems: newPickedItems
-    });
-  };
+    // Mark as picked
+    setPickedItems(prev => new Set([...prev, item.id]));
+    toast.success(`✓ ${item.product.name} gepickt`);
+    setScannedBarcode('');
 
-  const nextOrder = () => {
-    if (!activeSession) return;
-
-    if (activeSession.currentOrderIndex < activeSession.orders.length - 1) {
-      setActiveSession({
-        ...activeSession,
-        currentOrderIndex: activeSession.currentOrderIndex + 1
-      });
-    } else {
-      // All orders completed
-      completePicking();
+    // Check if all items are picked
+    if (pickedItems.size + 1 === selectedOrder.items.length) {
+      setTimeout(() => {
+        completeOrder();
+      }, 1000);
     }
   };
 
-  const previousOrder = () => {
-    if (!activeSession || activeSession.currentOrderIndex === 0) return;
-
-    setActiveSession({
-      ...activeSession,
-      currentOrderIndex: activeSession.currentOrderIndex - 1
-    });
-  };
-
-  const completeCurrentOrder = async () => {
-    if (!activeSession) return;
-
-    const currentOrder = activeSession.orders[activeSession.currentOrderIndex];
-    const orderItems = currentOrder.order_items;
-    const pickedOrderItems = orderItems.filter(item => activeSession.pickedItems.has(item.id));
-
-    if (pickedOrderItems.length !== orderItems.length) {
-      if (!confirm(`Nur ${pickedOrderItems.length} von ${orderItems.length} Artikeln gepickt. Trotzdem fortfahren?`)) {
-        return;
-      }
-    }
+  const completeOrder = async () => {
+    if (!selectedOrder) return;
 
     try {
-      // Update order status
-      await supabase
+      const { error } = await supabase
         .from('orders')
         .update({ 
-          fulfillment_status: 'fulfilled',
-          updated_at: new Date().toISOString()
+          status: 'picked',
+          picked_at: new Date().toISOString()
         })
-        .eq('id', currentOrder.id);
+        .eq('id', selectedOrder.id);
 
-      toast.success(`Bestellung #${currentOrder.order_number} abgeschlossen`);
-      
-      // Move to next order or complete session
-      if (activeSession.currentOrderIndex < activeSession.orders.length - 1) {
-        nextOrder();
-      } else {
-        completePicking();
-      }
+      if (error) throw error;
+
+      toast.success('Bestellung abgeschlossen!');
+      setSelectedOrder(null);
+      setPickedItems(new Set());
+      setScanMode(false);
+      fetchOrders();
     } catch (error) {
-      toast.error('Fehler beim Abschließen der Bestellung');
+      console.error('Error completing order:', error);
+      toast.error('Fehler beim Abschließen');
     }
   };
 
-  const completePicking = async () => {
-    if (!activeSession) return;
-
-    const duration = Math.round((Date.now() - activeSession.startTime.getTime()) / 1000 / 60);
-    toast.success(`Kommissionierung abgeschlossen! ${activeSession.orders.length} Bestellungen in ${duration} Minuten`);
-    
-    setActiveSession(null);
-    setSelectedOrders(new Set());
-    fetchOrders();
+  const startPicking = (order: Order) => {
+    setSelectedOrder(order);
+    setScanMode(true);
+    setPickedItems(new Set());
   };
 
-  const filteredOrders = orders.filter(order => {
-    if (filterStatus === 'unfulfilled') return order.fulfillment_status !== 'fulfilled';
-    if (filterStatus === 'fulfilled') return order.fulfillment_status === 'fulfilled';
-    return true;
-  });
-
-  const currentOrder = activeSession ? activeSession.orders[activeSession.currentOrderIndex] : null;
-  const currentOrderItems = currentOrder ? currentOrder.order_items : [];
-  const groupedItemsByLocation = currentOrderItems.reduce((acc, item) => {
-    const location = item.product?.storage_location || 'Kein Lagerplatz';
-    if (!acc[location]) acc[location] = [];
-    acc[location].push(item);
-    return acc;
-  }, {} as Record<string, OrderItem[]>);
-
-  const currentOrderProgress = currentOrder ? {
-    picked: currentOrderItems.filter(item => activeSession?.pickedItems.has(item.id)).length,
-    total: currentOrderItems.length
-  } : { picked: 0, total: 0 };
+  const cancelPicking = () => {
+    setSelectedOrder(null);
+    setScanMode(false);
+    setPickedItems(new Set());
+    setScannedBarcode('');
+  };
 
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <Loader2 className="h-12 w-12 animate-spin text-white" />
+        <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gray-900 text-white pb-20">
-      {/* Header */}
-      <div className="fixed top-0 left-0 right-0 bg-black bg-opacity-80 backdrop-blur-sm z-50">
-        <div className="flex items-center justify-between p-4">
-          <button
-            onClick={() => activeSession ? setActiveSession(null) : window.history.back()}
-            className="p-2 rounded-lg bg-gray-800"
-          >
-            <ArrowLeft className="h-6 w-6" />
-          </button>
-          <h1 className="text-lg font-semibold">
-            {activeSession 
-              ? `Bestellung ${activeSession.currentOrderIndex + 1}/${activeSession.orders.length}`
-              : 'Kommissionierung'
-            }
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold">
+            {scanMode ? 'Produkte scannen' : 'Kommissionierung'}
           </h1>
-          {!activeSession && (
+          {scanMode && (
             <button
-              onClick={() => setShowFilters(!showFilters)}
+              onClick={cancelPicking}
               className="p-2 rounded-lg bg-gray-800"
             >
-              <Filter className="h-6 w-6" />
+              <X className="h-5 w-5" />
             </button>
           )}
-          {activeSession && (
-            <div className="text-sm">
-              {currentOrderProgress.picked}/{currentOrderProgress.total}
-            </div>
-          )}
         </div>
-      </div>
 
-      {/* Main Content */}
-      <div className="pt-20">
-        {!activeSession ? (
-          <>
-            {/* Filters */}
-            {showFilters && (
-              <div className="bg-gray-800 p-4 border-b border-gray-700">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setFilterStatus('all')}
-                    className={`px-4 py-2 rounded-lg ${
-                      filterStatus === 'all' ? 'bg-orange-600' : 'bg-gray-700'
-                    }`}
-                  >
-                    Alle
-                  </button>
-                  <button
-                    onClick={() => setFilterStatus('unfulfilled')}
-                    className={`px-4 py-2 rounded-lg ${
-                      filterStatus === 'unfulfilled' ? 'bg-orange-600' : 'bg-gray-700'
-                    }`}
-                  >
-                    Offen
-                  </button>
-                  <button
-                    onClick={() => setFilterStatus('fulfilled')}
-                    className={`px-4 py-2 rounded-lg ${
-                      filterStatus === 'fulfilled' ? 'bg-orange-600' : 'bg-gray-700'
-                    }`}
-                  >
-                    Erfüllt
-                  </button>
-                </div>
+        {!scanMode ? (
+          // Order List
+          <div className="space-y-4">
+            {orders.length === 0 ? (
+              <div className="text-center py-8">
+                <ShoppingCart className="h-12 w-12 text-gray-600 mx-auto mb-2" />
+                <p className="text-gray-400">Keine offenen Bestellungen</p>
               </div>
-            )}
-
-            {/* Orders List */}
-            <div className="p-4 space-y-3">
-              {filteredOrders.map(order => (
+            ) : (
+              orders.map(order => (
                 <div
                   key={order.id}
-                  className={`bg-gray-800 rounded-lg p-4 ${
-                    selectedOrders.has(order.id) ? 'ring-2 ring-orange-500' : ''
-                  }`}
-                  onClick={() => {
-                    const newSelected = new Set(selectedOrders);
-                    if (newSelected.has(order.id)) {
-                      newSelected.delete(order.id);
-                    } else {
-                      newSelected.add(order.id);
-                    }
-                    setSelectedOrders(newSelected);
-                  }}
+                  className="bg-gray-800 rounded-lg p-4 border border-gray-700"
                 >
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-6 h-6 rounded border-2 flex items-center justify-center ${
-                        selectedOrders.has(order.id) 
-                          ? 'bg-orange-600 border-orange-600' 
-                          : 'border-gray-600'
-                      }`}>
-                        {selectedOrders.has(order.id) && (
-                          <Check className="h-4 w-4" />
-                        )}
-                      </div>
-                      <div>
-                        <p className="font-semibold">#{order.order_number}</p>
-                        <p className="text-sm text-gray-400">{order.customer_name}</p>
-                      </div>
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <h3 className="font-semibold text-lg">
+                        Bestellung #{order.order_number}
+                      </h3>
+                      <p className="text-gray-400">{order.customer_name}</p>
                     </div>
-                    <span className={`px-2 py-1 rounded text-xs ${
-                      order.fulfillment_status === 'fulfilled'
-                        ? 'bg-green-900 text-green-300'
-                        : 'bg-orange-900 text-orange-300'
-                    }`}>
-                      {order.fulfillment_status === 'fulfilled' ? 'Erfüllt' : 'Offen'}
-                    </span>
+                    <div className="text-right">
+                      <p className="text-sm text-gray-400">
+                        {order.items.length} Artikel
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        <Clock className="inline h-3 w-3 mr-1" />
+                        {new Date(order.created_at).toLocaleTimeString('de-DE', {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="text-sm text-gray-400 mb-2">
-                    {order.order_items.length} Artikel • €{order.total_price.toFixed(2)}
-                  </div>
-
-                  {/* Item Preview */}
-                  <div className="flex gap-2 overflow-x-auto">
-                    {order.order_items.slice(0, 3).map(item => (
-                      <div key={item.id} className="flex-shrink-0 bg-gray-700 rounded px-2 py-1 text-xs">
-                        {item.quantity}x {item.title.substring(0, 20)}...
-                      </div>
-                    ))}
-                    {order.order_items.length > 3 && (
-                      <div className="flex-shrink-0 text-xs text-gray-500 px-2 py-1">
-                        +{order.order_items.length - 3} mehr
-                      </div>
-                    )}
-                  </div>
+                  <button
+                    onClick={() => startPicking(order)}
+                    className="w-full bg-orange-600 rounded-lg py-3 font-medium flex items-center justify-center gap-2"
+                  >
+                    <Package className="h-5 w-5" />
+                    Kommissionierung starten
+                    <ChevronRight className="h-5 w-5" />
+                  </button>
                 </div>
-              ))}
-            </div>
-          </>
+              ))
+            )}
+          </div>
         ) : (
-          /* Active Picking Session - Current Order */
-          <div className="p-4">
-            {/* Order Header */}
-            <div className="bg-blue-900 bg-opacity-50 rounded-lg p-4 mb-4">
-              <div className="flex justify-between items-start mb-2">
-                <div>
-                  <h2 className="text-xl font-bold">#{currentOrder?.order_number}</h2>
-                  <p className="text-gray-300">{currentOrder?.customer_name}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm text-gray-400">Bestellung</p>
-                  <p className="font-bold">{activeSession.currentOrderIndex + 1} / {activeSession.orders.length}</p>
-                </div>
-              </div>
-              
-              {/* Progress Bar */}
-              <div className="mt-3">
-                <div className="flex justify-between text-sm mb-1">
-                  <span>Fortschritt</span>
-                  <span>{Math.round((currentOrderProgress.picked / currentOrderProgress.total) * 100)}%</span>
-                </div>
-                <div className="bg-gray-700 rounded-full h-3">
-                  <div 
-                    className="bg-orange-600 h-3 rounded-full transition-all"
-                    style={{ 
-                      width: `${(currentOrderProgress.picked / currentOrderProgress.total) * 100}%` 
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Items grouped by location */}
-            {Object.entries(groupedItemsByLocation).map(([location, items]) => (
-              <div key={location} className="mb-6">
-                <div className="flex items-center gap-2 mb-3">
-                  <MapPin className="h-5 w-5 text-blue-500" />
-                  <h3 className="text-lg font-semibold">{location}</h3>
-                </div>
-
-                <div className="space-y-2">
-                  {items.map((item) => (
-                    <div
-                      key={item.id}
-                      className={`bg-gray-800 rounded-lg p-4 ${
-                        activeSession.pickedItems.has(item.id) 
-                          ? 'opacity-50' 
-                          : ''
-                      }`}
-                      onClick={() => toggleItemPicked(item.id)}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center flex-shrink-0 ${
-                          activeSession.pickedItems.has(item.id)
-                            ? 'bg-green-600 border-green-600'
-                            : 'border-orange-500'
-                        }`}>
-                          {activeSession.pickedItems.has(item.id) ? (
-                            <Check className="h-5 w-5" />
-                          ) : (
-                            <span className="text-sm font-bold">{item.quantity}</span>
-                          )}
-                        </div>
-
-                        <div className="flex-1">
-                          <p className={`font-medium ${
-                            activeSession.pickedItems.has(item.id) ? 'line-through' : ''
-                          }`}>
-                            {item.title}
-                          </p>
-                          <p className="text-sm text-gray-400">
-                            {item.sku}
-                          </p>
-                          {item.variant_title && (
-                            <p className="text-sm text-gray-500">{item.variant_title}</p>
-                          )}
-                        </div>
-
-                        {item.product?.image_url && (
-                          <img
-                            src={item.product.image_url}
-                            alt={item.title}
-                            className="w-16 h-16 rounded object-cover"
-                          />
-                        )}
-                      </div>
+          // Picking Mode
+          <div className="space-y-4">
+            {selectedOrder && (
+              <>
+                {/* Order Header */}
+                <div className="bg-gray-800 rounded-lg p-4">
+                  <h3 className="font-semibold">
+                    Bestellung #{selectedOrder.order_number}
+                  </h3>
+                  <p className="text-gray-400">{selectedOrder.customer_name}</p>
+                  <div className="mt-2 flex items-center gap-4">
+                    <span className="text-sm">
+                      Fortschritt: {pickedItems.size} / {selectedOrder.items.length}
+                    </span>
+                    <div className="flex-1 bg-gray-700 rounded-full h-2">
+                      <div
+                        className="bg-green-500 h-2 rounded-full transition-all"
+                        style={{
+                          width: `${(pickedItems.size / selectedOrder.items.length) * 100}%`
+                        }}
+                      />
                     </div>
-                  ))}
+                  </div>
                 </div>
-              </div>
-            ))}
 
-            {/* Navigation Buttons */}
-            <div className="grid grid-cols-2 gap-3 mt-6">
-              <button
-                onClick={previousOrder}
-                disabled={activeSession.currentOrderIndex === 0}
-                className="py-3 bg-gray-700 rounded-lg font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                <ChevronLeft className="h-5 w-5" />
-                Zurück
-              </button>
-              <button
-                onClick={completeCurrentOrder}
-                className={`py-3 rounded-lg font-semibold flex items-center justify-center gap-2 ${
-                  currentOrderProgress.picked === currentOrderProgress.total
-                    ? 'bg-green-600'
-                    : 'bg-orange-600'
-                }`}
-              >
-                {activeSession.currentOrderIndex < activeSession.orders.length - 1 ? 'Nächste' : 'Fertig'}
-                <ChevronRight className="h-5 w-5" />
-              </button>
-            </div>
+                {/* Barcode Scanner */}
+                <div className="bg-gray-800 rounded-lg p-4">
+                  <label className="block text-sm font-medium mb-2">
+                    Produkt-Barcode scannen
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={scannedBarcode}
+                      onChange={(e) => setScannedBarcode(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          handleBarcodeInput();
+                        }
+                      }}
+                      placeholder="Barcode scannen..."
+                      className="flex-1 bg-gray-700 rounded-lg px-4 py-3 text-lg"
+                      autoFocus
+                    />
+                    <button
+                      onClick={handleBarcodeInput}
+                      disabled={!scannedBarcode}
+                      className="px-4 py-3 bg-orange-600 rounded-lg disabled:bg-gray-600"
+                    >
+                      <Camera className="h-6 w-6" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Product List */}
+                <div className="space-y-3">
+                  <h3 className="font-medium text-gray-400">Zu pickende Produkte:</h3>
+                  {selectedOrder.items.map(item => {
+                    const isPicked = pickedItems.has(item.id);
+                    
+                    return (
+                      <div
+                        key={item.id}
+                        className={`bg-gray-800 rounded-lg p-4 border ${
+                          isPicked 
+                            ? 'border-green-500 opacity-50' 
+                            : 'border-gray-700'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="mt-1">
+                            {isPicked ? (
+                              <CheckCircle className="h-6 w-6 text-green-500" />
+                            ) : (
+                              <div className="h-6 w-6 rounded-full border-2 border-gray-600" />
+                            )}
+                          </div>
+                          
+                          <div className="flex-1">
+                            <h4 className={`font-semibold ${isPicked ? 'line-through' : ''}`}>
+                              {item.product.name}
+                            </h4>
+                            <p className="text-sm text-gray-400">
+                              SKU: {item.product.sku}
+                            </p>
+                            {item.product.barcode && (
+                              <p className="text-xs text-gray-500">
+                                Barcode: {item.product.barcode}
+                              </p>
+                            )}
+                            <div className="flex items-center gap-4 mt-2">
+                              <span className="text-sm">
+                                Menge: <strong>{item.quantity}</strong>
+                              </span>
+                              {item.product.storage_location && (
+                                <div className="flex items-center gap-1 text-sm text-blue-400">
+                                  <MapPin className="h-4 w-4" />
+                                  {item.product.storage_location}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {item.product.image_url && (
+                            <img
+                              src={item.product.image_url}
+                              alt={item.product.name}
+                              className="w-16 h-16 rounded object-cover"
+                            />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Complete Button */}
+                {pickedItems.size === selectedOrder.items.length && (
+                  <button
+                    onClick={completeOrder}
+                    className="w-full bg-green-600 rounded-lg py-4 font-semibold flex items-center justify-center gap-2"
+                  >
+                    <Check className="h-6 w-6" />
+                    Kommissionierung abschließen
+                  </button>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>
 
-      {/* Bottom Actions */}
-      {!activeSession && selectedOrders.size > 0 && (
-        <div className="fixed bottom-20 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm p-4">
-          <button
-            onClick={startPicking}
-            className="w-full bg-orange-600 hover:bg-orange-700 text-white py-4 rounded-lg font-semibold text-lg flex items-center justify-center gap-2"
-          >
-            <Package className="h-6 w-6" />
-            Kommissionierung starten ({selectedOrders.size})
-          </button>
-        </div>
-      )}
-
       {/* Bottom Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm">
+      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm z-40 mobile-bottom-nav">
         <div className="grid grid-cols-4 py-2">
           <Link href="/mobile" className="flex flex-col items-center gap-1 py-2 text-gray-400">
             <Home className="h-6 w-6" />
@@ -517,9 +372,9 @@ export default function MobilePickingPage() {
             <ShoppingCart className="h-6 w-6" />
             <span className="text-xs">Picken</span>
           </Link>
-          <Link href="/mobile/locations" className="flex flex-col items-center gap-1 py-2 text-gray-400">
-            <MapPin className="h-6 w-6" />
-            <span className="text-xs">Plätze</span>
+          <Link href="/mobile/products" className="flex flex-col items-center gap-1 py-2 text-gray-400">
+            <Package className="h-6 w-6" />
+            <span className="text-xs">Produkte</span>
           </Link>
         </div>
       </div>

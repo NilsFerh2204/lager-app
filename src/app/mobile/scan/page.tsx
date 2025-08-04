@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
   Camera,
@@ -15,9 +15,11 @@ import {
   ShoppingCart,
   QrCode,
   Save,
-  CameraOff
+  CameraOff,
+  Search
 } from 'lucide-react';
 import Link from 'next/link';
+import { BrowserMultiFormatReader } from '@zxing/library';
 import toast from 'react-hot-toast';
 
 interface Product {
@@ -38,9 +40,108 @@ export default function MobileScannerPage() {
   const [loading, setLoading] = useState(false);
   const [showCreateProduct, setShowCreateProduct] = useState(false);
   const [newProductName, setNewProductName] = useState('');
+  const [showCamera, setShowCamera] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
 
-  const checkProduct = async () => {
-    if (!manualBarcode.trim()) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const readerRef = useRef<BrowserMultiFormatReader | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
+  const startCamera = async () => {
+    try {
+      setShowCamera(true);
+      setIsScanning(true);
+      
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      });
+
+      streamRef.current = stream;
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        
+        // Initialize barcode reader
+        if (!readerRef.current) {
+          readerRef.current = new BrowserMultiFormatReader();
+        }
+
+        // Start continuous scanning
+        const scanInterval = setInterval(async () => {
+          if (videoRef.current && readerRef.current && isScanning) {
+            try {
+              const result = await readerRef.current.decodeOnceFromVideoElement(videoRef.current);
+              if (result) {
+                const code = result.getText();
+                handleBarcodeDetected(code);
+                clearInterval(scanInterval);
+              }
+            } catch (err) {
+              // No barcode found, continue scanning
+            }
+          }
+        }, 300);
+
+        // Store interval ID for cleanup
+        (window as any).scanInterval = scanInterval;
+      }
+    } catch (error) {
+      console.error('Camera error:', error);
+      toast.error('Kamera konnte nicht gestartet werden');
+      setShowCamera(false);
+      setIsScanning(false);
+    }
+  };
+
+  const stopCamera = () => {
+    // Clear scanning interval
+    if ((window as any).scanInterval) {
+      clearInterval((window as any).scanInterval);
+      (window as any).scanInterval = null;
+    }
+
+    // Stop video stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setShowCamera(false);
+    setIsScanning(false);
+  };
+
+  const handleBarcodeDetected = async (code: string) => {
+    stopCamera();
+    setManualBarcode(code);
+    
+    // Vibration feedback
+    if (navigator.vibrate) {
+      navigator.vibrate(200);
+    }
+    
+    await checkProduct(code);
+  };
+
+  const checkProduct = async (barcode?: string) => {
+    const codeToCheck = barcode || manualBarcode;
+    
+    if (!codeToCheck.trim()) {
       toast.error('Bitte Barcode eingeben');
       return;
     }
@@ -50,7 +151,7 @@ export default function MobileScannerPage() {
       const { data, error } = await supabase
         .from('products')
         .select('*')
-        .eq('barcode', manualBarcode)
+        .eq('barcode', codeToCheck)
         .single();
 
       if (error || !data) {
@@ -156,6 +257,7 @@ export default function MobileScannerPage() {
     setQuantity(1);
     setShowCreateProduct(false);
     setNewProductName('');
+    stopCamera();
   };
 
   return (
@@ -179,32 +281,80 @@ export default function MobileScannerPage() {
                   type="text"
                   value={manualBarcode}
                   onChange={(e) => setManualBarcode(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      checkProduct();
+                    }
+                  }}
                   placeholder="z.B. 4006680012342"
                   className="flex-1 bg-gray-700 rounded-lg px-4 py-3 text-lg"
-                  autoFocus
+                  autoFocus={!showCamera}
                 />
                 <button
-                  onClick={checkProduct}
+                  onClick={() => checkProduct()}
                   disabled={loading || !manualBarcode}
-                  className="px-4 py-3 bg-orange-600 rounded-lg disabled:bg-gray-600"
+                  className="px-4 py-3 bg-blue-600 rounded-lg disabled:bg-gray-600"
+                >
+                  <Search className="h-6 w-6" />
+                </button>
+                <button
+                  onClick={startCamera}
+                  className="px-4 py-3 bg-orange-600 rounded-lg"
                 >
                   <Camera className="h-6 w-6" />
                 </button>
               </div>
               <p className="text-xs text-gray-400 mt-2">
-                Nutzen Sie einen externen Barcode-Scanner oder geben Sie den Code manuell ein
+                Nutzen Sie die Kamera oder geben Sie den Code manuell ein
               </p>
             </div>
 
+            {/* Camera View */}
+            {showCamera && (
+              <div className="relative bg-black rounded-lg overflow-hidden">
+                <video
+                  ref={videoRef}
+                  className="w-full aspect-video object-cover"
+                  playsInline
+                  muted
+                  autoPlay
+                />
+                
+                {/* Scan Frame */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="w-64 h-32 border-2 border-orange-500 rounded-lg">
+                    <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-orange-500" />
+                    <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-orange-500" />
+                    <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-orange-500" />
+                    <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-orange-500" />
+                  </div>
+                </div>
+
+                {/* Close Button */}
+                <button
+                  onClick={stopCamera}
+                  className="absolute top-4 right-4 p-2 bg-red-600 rounded-full"
+                >
+                  <CameraOff className="h-5 w-5" />
+                </button>
+
+                <div className="absolute bottom-4 left-4 right-4 bg-black bg-opacity-75 rounded-lg p-2 text-center text-sm">
+                  Barcode in den Rahmen halten
+                </div>
+              </div>
+            )}
+
             {/* Quick Instructions */}
-            <div className="bg-blue-900 bg-opacity-30 rounded-lg p-4">
-              <h3 className="font-semibold mb-2">So funktioniert's:</h3>
-              <ol className="text-sm space-y-1 text-gray-300">
-                <li>1. Barcode eingeben oder mit externem Scanner einlesen</li>
-                <li>2. Produkt wird automatisch gefunden oder neu angelegt</li>
-                <li>3. Bestand anpassen und speichern</li>
-              </ol>
-            </div>
+            {!showCamera && (
+              <div className="bg-blue-900 bg-opacity-30 rounded-lg p-4">
+                <h3 className="font-semibold mb-2">So funktioniert's:</h3>
+                <ol className="text-sm space-y-1 text-gray-300">
+                  <li>1. Barcode manuell eingeben oder Kamera nutzen</li>
+                  <li>2. Produkt wird automatisch gefunden oder neu angelegt</li>
+                  <li>3. Bestand anpassen und speichern</li>
+                </ol>
+              </div>
+            )}
           </div>
         )}
 
