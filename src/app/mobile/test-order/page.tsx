@@ -21,6 +21,8 @@ export default function CreateTestOrderPage() {
         return;
       }
 
+      console.log('Found products:', products);
+
       // Create a test order
       const { data: order, error: orderError } = await supabase
         .from('orders')
@@ -34,9 +36,12 @@ export default function CreateTestOrderPage() {
         .single();
 
       if (orderError || !order) {
+        console.error('Order error:', orderError);
         toast.error('Fehler beim Erstellen der Bestellung');
         return;
       }
+
+      console.log('Created order:', order);
 
       // Create order items
       const orderItems = products.map((product, index) => ({
@@ -46,15 +51,20 @@ export default function CreateTestOrderPage() {
         picked_quantity: 0
       }));
 
-      const { error: itemsError } = await supabase
+      console.log('Creating order items:', orderItems);
+
+      const { data: createdItems, error: itemsError } = await supabase
         .from('order_items')
-        .insert(orderItems);
+        .insert(orderItems)
+        .select('*');
 
       if (itemsError) {
+        console.error('Items error:', itemsError);
         toast.error('Fehler beim Erstellen der Bestellpositionen');
         return;
       }
 
+      console.log('Created order items:', createdItems);
       toast.success('Test-Bestellung erstellt!');
     } catch (error) {
       console.error('Error:', error);
