@@ -58,45 +58,67 @@ export default function MobileScannerPage() {
 
   const startCamera = async () => {
     try {
+      // First check if camera permissions are available
+      const permissions = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        .then(() => true)
+        .catch(() => false);
+      
+      if (!permissions) {
+        toast.error('Kamera-Berechtigung verweigert. Bitte erlauben Sie den Kamerazugriff.');
+        return;
+      }
+
       setShowCamera(true);
       setScanStatus('Kamera wird gestartet...');
       
       // Stop any existing camera
-      stopCamera();
+      if (controlsRef.current) {
+        controlsRef.current.stop();
+        controlsRef.current = null;
+      }
       
       // Initialize reader without hints (let it use defaults)
       readerRef.current = new BrowserMultiFormatReader();
       
-      // Add console log to debug
       console.log('Starting camera scan...');
       
-      // Start decoding from camera
-      controlsRef.current = await readerRef.current.decodeFromVideoDevice(
-        undefined, // use default camera
-        videoRef.current,
-        (result, error) => {
-          if (result) {
-            const code = result.getText();
-            console.log('Barcode detected:', code);
-            
-            // Prevent duplicate scans
-            if (code !== lastScannedRef.current) {
-              lastScannedRef.current = code;
-              handleBarcodeDetected(code);
+      // Wait a bit for the video element to be ready
+      setTimeout(async () => {
+        try {
+          // Start decoding from camera
+          controlsRef.current = await readerRef.current.decodeFromVideoDevice(
+            undefined, // use default camera
+            videoRef.current,
+            (result, error) => {
+              if (result) {
+                const code = result.getText();
+                console.log('Barcode detected:', code);
+                
+                // Prevent duplicate scans
+                if (code !== lastScannedRef.current && isScanning) {
+                  lastScannedRef.current = code;
+                  handleBarcodeDetected(code);
+                }
+              }
+              if (error && !error.message.includes('NotFoundException')) {
+                console.error('Scan error:', error);
+              }
             }
-          }
-          if (error && !error.message.includes('NotFoundException')) {
-            console.error('Scan error:', error);
-          }
+          );
+          
+          setIsScanning(true);
+          setScanStatus('Barcode in den Rahmen halten...');
+        } catch (innerError) {
+          console.error('Camera start error:', innerError);
+          toast.error('Fehler beim Starten der Kamera');
+          setShowCamera(false);
+          setIsScanning(false);
         }
-      );
+      }, 100);
       
-      setIsScanning(true);
-      setScanStatus('Barcode in den Rahmen halten...');
-      
-    } catch (error) {
+    } catch (error: any) {
       console.error('Camera error:', error);
-      toast.error('Kamera konnte nicht gestartet werden');
+      toast.error(error.message || 'Kamera konnte nicht gestartet werden');
       setScanStatus('Fehler beim Kamerazugriff');
       setShowCamera(false);
       setIsScanning(false);
