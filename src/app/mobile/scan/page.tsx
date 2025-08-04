@@ -47,8 +47,8 @@ export default function MobileScannerPage() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const controlsRef = useRef<any>(null);
+  const lastScannedRef = useRef<string>('');
 
   useEffect(() => {
     return () => {
@@ -64,8 +64,11 @@ export default function MobileScannerPage() {
       // Stop any existing camera
       stopCamera();
       
-      // Initialize reader
+      // Initialize reader without hints (let it use defaults)
       readerRef.current = new BrowserMultiFormatReader();
+      
+      // Add console log to debug
+      console.log('Starting camera scan...');
       
       // Start decoding from camera
       controlsRef.current = await readerRef.current.decodeFromVideoDevice(
@@ -73,10 +76,16 @@ export default function MobileScannerPage() {
         videoRef.current,
         (result, error) => {
           if (result) {
-            console.log('Barcode detected:', result.getText());
-            handleBarcodeDetected(result.getText());
+            const code = result.getText();
+            console.log('Barcode detected:', code);
+            
+            // Prevent duplicate scans
+            if (code !== lastScannedRef.current) {
+              lastScannedRef.current = code;
+              handleBarcodeDetected(code);
+            }
           }
-          if (error && error.message && !error.message.includes('NotFoundException')) {
+          if (error && !error.message.includes('NotFoundException')) {
             console.error('Scan error:', error);
           }
         }
@@ -116,6 +125,7 @@ export default function MobileScannerPage() {
       setShowCamera(false);
       setIsScanning(false);
       setScanStatus('');
+      lastScannedRef.current = '';
     } catch (error) {
       console.error('Error stopping camera:', error);
     }
