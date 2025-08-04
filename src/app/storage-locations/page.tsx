@@ -31,7 +31,7 @@ interface StorageLocation {
   code: string;
   name: string;
   zone: string;
-  row: string;
+  row_num: string;  // Geändert von row zu row_num
   shelf: string;
   level: string;
   capacity: number;
@@ -69,7 +69,7 @@ export default function StorageLocationsPage() {
   // Form states
   const [formData, setFormData] = useState({
     zone: '',
-    row: '',
+    row_num: '',  // Geändert von row zu row_num
     shelf: '',
     level: '',
     name: '',
@@ -91,7 +91,7 @@ export default function StorageLocationsPage() {
       const { data, error } = await supabase
         .from('storage_locations')
         .select('*')
-        .order('zone, row, shelf, level');
+        .order('zone, row_num, shelf, level');  // Geändert von row zu row_num
 
       if (error) throw error;
       setLocations(data || []);
@@ -125,7 +125,7 @@ export default function StorageLocationsPage() {
   };
 
   const generateLocationCode = (data: typeof formData) => {
-    return `${data.zone}${data.row}-${data.shelf}${data.level}`;
+    return `${data.zone}${data.row_num}-${data.shelf}${data.level}`;  // Geändert von row zu row_num
   };
 
   const createLocation = async () => {
@@ -145,7 +145,7 @@ export default function StorageLocationsPage() {
           code,
           name: formData.name || code,
           zone: formData.zone,
-          row: formData.row,
+          row_num: formData.row_num,  // Geändert von row zu row_num
           shelf: formData.shelf,
           level: formData.level,
           capacity: formData.capacity,
@@ -159,7 +159,7 @@ export default function StorageLocationsPage() {
       setLocations([...locations, data]);
       toast.success('Lagerplatz erstellt');
       setIsCreating(false);
-      setFormData({ zone: '', row: '', shelf: '', level: '', name: '', capacity: 100 });
+      setFormData({ zone: '', row_num: '', shelf: '', level: '', name: '', capacity: 100 });  // Geändert
     } catch (error: any) {
       console.error('Error creating location:', error);
       toast.error('Fehler beim Erstellen des Lagerplatzes');
@@ -217,7 +217,7 @@ export default function StorageLocationsPage() {
             code: location.code,
             id: location.id,
             zone: location.zone,
-            row: location.row,
+            row_num: location.row_num,  // Geändert von row zu row_num
             shelf: location.shelf,
             level: location.level
           });
@@ -275,7 +275,7 @@ export default function StorageLocationsPage() {
               <img src="${qrImage}" alt="QR Code" />
               <div class="info">
                 <p><strong>Zone:</strong> ${showQRModal.zone}</p>
-                <p><strong>Reihe:</strong> ${showQRModal.row}</p>
+                <p><strong>Reihe:</strong> ${showQRModal.row_num}</p>
                 <p><strong>Regal:</strong> ${showQRModal.shelf}</p>
                 <p><strong>Ebene:</strong> ${showQRModal.level}</p>
               </div>
@@ -458,7 +458,7 @@ export default function StorageLocationsPage() {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Reihe:</span>
-                <span className="font-medium">{location.row}</span>
+                <span className="font-medium">{location.row_num}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Regal:</span>
@@ -542,8 +542,8 @@ export default function StorageLocationsPage() {
                   <label className="block text-sm font-medium mb-1">Reihe</label>
                   <input
                     type="text"
-                    value={formData.row}
-                    onChange={(e) => setFormData({...formData, row: e.target.value})}
+                    value={formData.row_num}
+                    onChange={(e) => setFormData({...formData, row_num: e.target.value})}
                     className="w-full px-3 py-2 border rounded-lg"
                     placeholder="01"
                     maxLength={2}
@@ -598,7 +598,7 @@ export default function StorageLocationsPage() {
                 />
               </div>
 
-              {formData.zone && formData.row && formData.shelf && formData.level && (
+              {formData.zone && formData.row_num && formData.shelf && formData.level && (
                 <div className="p-3 bg-blue-50 rounded-lg">
                   <p className="text-sm text-gray-600">Vorschau Code:</p>
                   <p className="font-bold text-lg">{generateLocationCode(formData)}</p>
@@ -610,7 +610,7 @@ export default function StorageLocationsPage() {
               <button
                 onClick={() => {
                   setIsCreating(false);
-                  setFormData({ zone: '', row: '', shelf: '', level: '', name: '', capacity: 100 });
+                  setFormData({ zone: '', row_num: '', shelf: '', level: '', name: '', capacity: 100 });
                 }}
                 className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
               >
@@ -618,7 +618,7 @@ export default function StorageLocationsPage() {
               </button>
               <button
                 onClick={createLocation}
-                disabled={!formData.zone || !formData.row || !formData.shelf || !formData.level}
+                disabled={!formData.zone || !formData.row_num || !formData.shelf || !formData.level}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
                 Erstellen
@@ -654,7 +654,7 @@ export default function StorageLocationsPage() {
                 </div>
                 <div>
                   <span className="text-gray-600">Reihe:</span>
-                  <span className="font-medium ml-1">{showQRModal.row}</span>
+                  <span className="font-medium ml-1">{showQRModal.row_num}</span>
                 </div>
                 <div>
                   <span className="text-gray-600">Regal:</span>
