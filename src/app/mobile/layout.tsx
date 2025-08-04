@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Toaster } from 'react-hot-toast';
 import MobileNavigation from '@/components/MobileNavigation';
-import "../globals.css"; // Korrekter Pfad
+import "../globals.css";
 
 export const metadata: Metadata = {
   title: "Lager App - Mobile",
@@ -18,7 +18,7 @@ export default function MobileLayout({
   return (
     <div className="min-h-screen bg-gray-900">
       <MobileNavigation />
-      <main className="pt-16 pb-20">
+      <main className="pb-20"> {/* Removed pt-16 */}
         {children}
       </main>
       <Toaster 

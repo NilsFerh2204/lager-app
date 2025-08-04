@@ -19,7 +19,8 @@ import {
   ClipboardList,
   QrCode,
   Database,
-  CameraOff
+  CameraOff,
+  Save
 } from 'lucide-react';
 import Link from 'next/link';
 import { BrowserMultiFormatReader } from '@zxing/library';
@@ -32,6 +33,7 @@ interface Product {
   current_stock: number;
   storage_location: string | null;
   image_url: string | null;
+  barcode: string | null;
 }
 
 export default function MobileScannerPage() {
@@ -43,29 +45,51 @@ export default function MobileScannerPage() {
   const [loading, setLoading] = useState(false);
   const [manualMode, setManualMode] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [showCreateProduct, setShowCreateProduct] = useState(false);
+  const [newProductName, setNewProductName] = useState('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     // Cleanup on unmount
     return () => {
       stopCamera();
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
     };
   }, []);
 
   const startCamera = async () => {
     try {
-      // Request rear camera specifically
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
+      // Stop any existing camera first
+      stopCamera();
+
+      // Try to get the rear camera
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === 'videoinput');
+      
+      // Find rear camera
+      const rearCamera = videoDevices.find(device => 
+        device.label.toLowerCase().includes('back') ||
+        device.label.toLowerCase().includes('rear') ||
+        device.label.toLowerCase().includes('environment') ||
+        device.label.toLowerCase().includes('hinten')
+      );
+
+      const constraints = {
         video: {
-          facingMode: 'environment', // This should use rear camera
+          deviceId: rearCamera ? { exact: rearCamera.deviceId } : undefined,
+          facingMode: rearCamera ? undefined : { ideal: 'environment' },
           width: { ideal: 1920 },
           height: { ideal: 1080 }
         },
         audio: false
-      });
+      };
 
+      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       setStream(mediaStream);
       
       if (videoRef.current) {
@@ -76,10 +100,11 @@ export default function MobileScannerPage() {
           readerRef.current = new BrowserMultiFormatReader();
         }
 
+        setIsScanning(true);
+
         // Scan continuously
-        const scanInterval = setInterval(async () => {
+        intervalRef.current = setInterval(async () => {
           if (!videoRef.current || !isScanning) {
-            clearInterval(scanInterval);
             return;
           }
 
@@ -88,14 +113,11 @@ export default function MobileScannerPage() {
             if (result) {
               const code = result.getText();
               handleBarcodeDetected(code);
-              clearInterval(scanInterval);
             }
           } catch (err) {
             // No barcode found, continue scanning
           }
-        }, 500); // Scan every 500ms
-
-        setIsScanning(true);
+        }, 500);
       }
     } catch (error) {
       console.error('Camera error:', error);
@@ -105,6 +127,11 @@ export default function MobileScannerPage() {
   };
 
   const stopCamera = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
@@ -141,34 +168,54 @@ export default function MobileScannerPage() {
         .single();
 
       if (error || !data) {
-        // Unknown barcode - save it
-        await supabase
-          .from('unknown_barcodes')
-          .upsert({
-            barcode: searchTerm,
-            scan_count: 1,
-            last_scanned: new Date().toISOString()
-          }, {
-            onConflict: 'barcode'
-          });
-
-        toast.error(
-          <div>
-            <p>Unbekannter Barcode!</p>
-            <Link href={`/mobile/barcode-learning?barcode=${searchTerm}`} className="underline">
-              Jetzt zuordnen →
-            </Link>
-          </div>
-        );
-        
+        // Product not found - offer to create new product
+        setShowCreateProduct(true);
         setProduct(null);
+        toast.error('Produkt nicht gefunden');
       } else {
         setProduct(data);
+        setShowCreateProduct(false);
         toast.success(`Gefunden: ${data.name}`);
       }
     } catch (error) {
       console.error('Search error:', error);
-      toast.error('Fehler bei der Suche');
+      setShowCreateProduct(true);
+      setProduct(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createNewProduct = async () => {
+    if (!newProductName.trim()) {
+      toast.error('Bitte Produktname eingeben');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .insert({
+          name: newProductName,
+          sku: scannedCode, // Use barcode as SKU initially
+          barcode: scannedCode,
+          current_stock: 0,
+          minimum_stock: 10,
+          shopify_id: null
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setProduct(data);
+      setShowCreateProduct(false);
+      setNewProductName('');
+      toast.success('Produkt erstellt!');
+    } catch (error) {
+      console.error('Create product error:', error);
+      toast.error('Fehler beim Erstellen');
     } finally {
       setLoading(false);
     }
@@ -217,6 +264,7 @@ export default function MobileScannerPage() {
       setProduct(null);
       setScannedCode('');
       setQuantity(1);
+      setShowCreateProduct(false);
     } catch (error) {
       console.error('Stock adjustment error:', error);
       toast.error('Fehler beim Aktualisieren');
@@ -229,36 +277,29 @@ export default function MobileScannerPage() {
     setProduct(null);
     setScannedCode('');
     setQuantity(1);
+    setShowCreateProduct(false);
+    setNewProductName('');
   };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white pb-20">
-      {/* Header */}
-      <div className="fixed top-0 left-0 right-0 bg-black bg-opacity-80 backdrop-blur-sm z-50">
-        <div className="flex items-center justify-between p-4">
-          <button
-            onClick={() => window.history.back()}
-            className="p-2 rounded-lg bg-gray-800"
-          >
-            <ArrowLeft className="h-6 w-6" />
-          </button>
-          <h1 className="text-lg font-semibold">Barcode Scanner</h1>
-          <button
-            onClick={() => setManualMode(!manualMode)}
-            className="p-2 rounded-lg bg-gray-800"
-          >
-            {manualMode ? <Camera className="h-6 w-6" /> : <Search className="h-6 w-6" />}
-          </button>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="pt-20 p-4">
-        {!product && (
+      {/* Main Content - No Header */}
+      <div className="p-4">
+        {!product && !showCreateProduct && (
           <>
             {!manualMode ? (
               /* Camera Scanner */
               <div className="space-y-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h1 className="text-xl font-semibold">Barcode Scanner</h1>
+                  <button
+                    onClick={() => setManualMode(true)}
+                    className="p-2 rounded-lg bg-gray-800"
+                  >
+                    <Search className="h-5 w-5" />
+                  </button>
+                </div>
+
                 {!isScanning ? (
                   <button
                     onClick={startCamera}
@@ -290,7 +331,7 @@ export default function MobileScannerPage() {
                       className="absolute bottom-4 left-1/2 transform -translate-x-1/2 px-6 py-3 bg-red-600 rounded-full flex items-center gap-2"
                     >
                       <CameraOff className="h-5 w-5" />
-                      Kamera stoppen
+                      Stoppen
                     </button>
                   </div>
                 )}
@@ -298,6 +339,16 @@ export default function MobileScannerPage() {
             ) : (
               /* Manual Input */
               <div className="space-y-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h1 className="text-xl font-semibold">Manuelle Eingabe</h1>
+                  <button
+                    onClick={() => setManualMode(false)}
+                    className="p-2 rounded-lg bg-gray-800"
+                  >
+                    <Camera className="h-5 w-5" />
+                  </button>
+                </div>
+
                 <div>
                   <label className="block text-sm font-medium mb-2">
                     Barcode / SKU eingeben
@@ -322,15 +373,65 @@ export default function MobileScannerPage() {
                 </div>
               </div>
             )}
-
-            {/* Last scanned code */}
-            {scannedCode && !product && !loading && (
-              <div className="mt-4 p-3 bg-gray-800 rounded-lg">
-                <p className="text-sm text-gray-400">Gescannter Code:</p>
-                <p className="font-mono text-lg">{scannedCode}</p>
-              </div>
-            )}
           </>
+        )}
+
+        {/* Create New Product */}
+        {showCreateProduct && (
+          <div className="space-y-4">
+            <div className="bg-gray-800 rounded-lg p-4">
+              <h2 className="text-lg font-semibold mb-3">Neues Produkt anlegen</h2>
+              <p className="text-sm text-gray-400 mb-4">
+                Barcode: <span className="font-mono">{scannedCode}</span>
+              </p>
+              
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Produktname
+                  </label>
+                  <input
+                    type="text"
+                    value={newProductName}
+                    onChange={(e) => setNewProductName(e.target.value)}
+                    placeholder="z.B. Feuerwerk Batterie XL"
+                    className="w-full bg-gray-700 rounded-lg px-3 py-2"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={resetScanner}
+                    className="py-2 bg-gray-700 rounded-lg font-medium"
+                  >
+                    Abbrechen
+                  </button>
+                  <button
+                    onClick={createNewProduct}
+                    disabled={loading || !newProductName.trim()}
+                    className="py-2 bg-green-600 rounded-lg font-medium flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <>
+                        <Save className="h-5 w-5" />
+                        Erstellen
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <Link
+              href="/mobile/barcode-learning"
+              className="block text-center text-orange-500 underline"
+            >
+              Oder vorhandenes Produkt zuordnen →
+            </Link>
+          </div>
         )}
 
         {/* Product Result */}
@@ -473,7 +574,7 @@ export default function MobileScannerPage() {
         )}
 
         {/* Quick Actions */}
-        {!isScanning && !product && (
+        {!isScanning && !product && !showCreateProduct && (
           <div className="mt-8 grid grid-cols-2 gap-4">
             <Link
               href="/mobile/inventory"
@@ -508,7 +609,7 @@ export default function MobileScannerPage() {
       </div>
 
       {/* Bottom Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm">
+      <div className="fixed bottom-0 left-0 right-0 bg-black bg-opacity-90 backdrop-blur-sm z-40">
         <div className="grid grid-cols-4 py-2">
           <Link href="/mobile" className="flex flex-col items-center gap-1 py-2 text-gray-400">
             <Home className="h-6 w-6" />
