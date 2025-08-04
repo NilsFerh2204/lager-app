@@ -1,30 +1,46 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://chsrszvsccovlpzyzdka.supabase.co';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNoc3JzenZzY2Nvdmxwenl6ZGthIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQyMTk0MTksImV4cCI6MjA2OTc5NTQxOX0.TJwBaIAXoOLhlpYM1F_-2Z6nJtOVoAOzU3EhpkBc3zw';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-if (!supabaseUrl) {
-  console.error('Missing NEXT_PUBLIC_SUPABASE_URL');
-}
+// Client für Browser
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-if (!supabaseAnonKey) {
-  console.error('Missing NEXT_PUBLIC_SUPABASE_ANON_KEY');
-}
+// Server Client Funktion für API Routes
+export const getSupabaseClient = () => {
+  return createClient(supabaseUrl, supabaseAnonKey);
+};
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-  },
-  db: {
-    schema: 'public'
-  },
-  global: {
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  },
-});
+// Admin Client für Server-seitige Operationen
+export const getSupabaseAdmin = () => {
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (supabaseServiceKey) {
+    return createClient(supabaseUrl, supabaseServiceKey);
+  }
+  return supabase;
+};
 
-// Debug logging
-console.log('Supabase initialized with URL:', supabaseUrl);
+// Types
+export type Database = {
+  public: {
+    Tables: {
+      products: {
+        Row: {
+          id: string;
+          shopify_id: string | null;
+          name: string;
+          sku: string;
+          current_stock: number;
+          minimum_stock: number;
+          storage_location: string | null;
+          last_sync: string | null;
+          last_inventory_update: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<Database['public']['Tables']['products']['Row'], 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Database['public']['Tables']['products']['Insert']>;
+      };
+    };
+  };
+};
